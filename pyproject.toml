@@ -20,6 +20,9 @@ dependencies = [
     "typer>=0.12",
 ]
 
+[project.urls]
+Repository = "https://github.com/agamemnon-coder/defi-risk-tools"
+
 [project.scripts]
 yield-scan = "defi_risk_tools.cli:app"
 

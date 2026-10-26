@@ -3,6 +3,8 @@
 **Cost-Negative Yield Scanner** (`yield-scan`): shows what a DeFi yield pays *after* the costs of
 using it, and flags the pools where an ordinary deposit loses money.
 
+Source: https://github.com/agamemnon-coder/defi-risk-tools (MIT)
+
 > **This is an estimate tool. It is not financial advice.** Every number it prints comes from a
 > small model with the assumptions listed below, applied to public data that may be wrong or out
 > of date. It cannot know your wallet, your tax situation, or what a protocol will do tomorrow.
