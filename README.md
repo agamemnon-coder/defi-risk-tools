@@ -5,6 +5,10 @@ using it, and flags the pools where an ordinary deposit loses money.
 
 Source: https://github.com/agamemnon-coder/defi-risk-tools (MIT)
 
+**Live report:** <https://agamemnon-coder.github.io/defi-risk-tools/>, rebuilt every day from live
+DeFiLlama data. If you fork this repository, turn it on under Settings → Pages → Source: GitHub
+Actions.
+
 > **This is an estimate tool. It is not financial advice.** Every number it prints comes from a
 > small model with the assumptions listed below, applied to public data that may be wrong or out
 > of date. It cannot know your wallet, your tax situation, or what a protocol will do tomorrow.
@@ -182,6 +186,18 @@ many of the pools shown have an estimated IL or none), `notes` and `pools`. Each
 `break_even_size_usd`, `break_even_days`, `il_volatility`, `flags`, `reward_tokens` and
 `underlying_tokens`. `break_even_size_usd`, `break_even_days` and `il_volatility` are `null` when
 there is none.
+
+### Live report on GitHub Pages
+
+[`.github/workflows/pages.yml`](.github/workflows/pages.yml) builds the report from live data and
+publishes it at <https://agamemnon-coder.github.io/defi-risk-tools/>. It runs every day at 06:17
+UTC, on every push to `main`, and on demand (Actions → Pages → Run workflow). It runs
+`yield-scan report --out site/index.html --limit 100`, so the page shows the 100 most misleading
+pools, with the default assumptions. If the pools cannot be fetched the build fails and the
+previous page stays up.
+
+To publish your own copy from a fork, turn it on once under Settings → Pages → Source: GitHub
+Actions.
 
 ## How the numbers are made
 

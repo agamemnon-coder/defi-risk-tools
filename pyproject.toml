@@ -29,6 +29,7 @@ yield-scan = "defi_risk_tools.cli:app"
 [dependency-groups]
 dev = [
     "pytest>=8",
+    "pyyaml>=6.0.3",
     "respx>=0.21",
     "ruff>=0.6",
 ]

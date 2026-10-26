@@ -156,3 +156,9 @@ For each pool:
    The `stablecoin` field no longer affects the model. On the saved 2026-10-26 snapshot (an
    offline run, without impermanent loss estimates) the cost-negative pools go from 1,137 to 793 of
    1,949, and on the fixture from 19 to 12 of 53.
+2. **A daily live report on GitHub Pages.** `.github/workflows/pages.yml` runs every day at 06:17
+   UTC, on every push to `main` and on demand. It runs `yield-scan report --out site/index.html
+   --limit 100` with live data and deploys the `site` folder with `actions/upload-pages-artifact`
+   and `actions/deploy-pages` (permissions `contents: read`, `pages: write` and `id-token: write`;
+   concurrency group `pages`; environment `github-pages`). A fork turns it on under
+   Settings > Pages > Source: GitHub Actions.

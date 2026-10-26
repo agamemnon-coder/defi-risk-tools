@@ -21,3 +21,6 @@ htmlcov/
 .idea/
 .vscode/
 .DS_Store
+
+# GitHub Pages build output (see .github/workflows/pages.yml)
+site/
