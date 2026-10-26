@@ -230,6 +230,80 @@ def test_a_response_that_is_not_a_chart_is_a_failure_and_not_split(http_mock):
     assert "'coins' object" in notes[0]
 
 
+def test_five_failed_requests_in_a_row_make_it_give_up_on_the_coins_not_asked_for_yet(serve_chart):
+    keys = [f"arbitrum:0x{i:040x}" for i in range(60)]  # six requests of ten
+    server = serve_chart({key: [1.0] for key in keys}, fail=set(keys))
+
+    with make_client() as client:
+        series, notes = prices.fetch_series(client, keys)
+
+    assert series == {}
+    # five requests that failed, each sent twice (a 500 is retried once), and no sixth request
+    assert [len(request) for request in server.requests] == [10] * 10
+    assert notes == [
+        "Token prices: 60 of 60 coins could not be fetched "
+        "(HTTP 500, gave up after 5 failed requests in a row)."
+    ]
+
+
+def test_a_request_that_works_starts_the_count_again(serve_chart):
+    keys = [f"arbitrum:0x{i:040x}" for i in range(70)]  # seven requests of ten
+    # requests 1 to 4 fail, the 5th works, the 6th fails and the 7th works: never five in a row
+    failing = set(keys[:40]) | set(keys[50:60])
+    server = serve_chart({key: [1.0] for key in keys}, fail=failing)
+
+    with make_client() as client:
+        series, notes = prices.fetch_series(client, keys)
+
+    assert set(series) == set(keys[40:50]) | set(keys[60:])
+    assert len(server.requests) == 4 * 2 + 1 + 2 + 1  # a 500 is sent twice
+    assert notes == ["Token prices: 50 of 70 coins could not be fetched (HTTP 500)."]
+
+
+def test_a_bad_coin_in_every_request_does_not_make_it_give_up(serve_chart):
+    keys = [f"arbitrum:0x{i:040x}" for i in range(60)]
+    bad = {keys[i] for i in range(0, 60, 10)}  # one bad coin in each of the six requests
+    server = serve_chart({key: [1.0] for key in keys}, reject=bad)
+
+    with make_client() as client:
+        series, notes = prices.fetch_series(client, keys)
+
+    # Six requests in a row were rejected, but each was split, and the pieces without the bad coin
+    # worked: so the server is up, and it went on to the end.
+    assert set(series) == set(keys) - bad
+    assert notes == ["Token prices: 6 of 60 coins could not be fetched (HTTP 400)."]
+    assert sum(len(request) == 10 for request in server.requests) == 6
+
+
+def test_a_server_that_rejects_every_coin_is_given_up_on_like_one_that_is_down(serve_chart):
+    keys = [f"arbitrum:0x{i:040x}" for i in range(60)]
+    server = serve_chart({key: [1.0] for key in keys}, reject=set(keys))
+
+    with make_client() as client:
+        series, notes = prices.fetch_series(client, keys)
+
+    assert series == {}
+    # Each request of ten is split down to single coins, which makes 19 requests that all fail, and
+    # a 400 is not sent twice. After five such requests the sixth is not asked for.
+    assert len(server.requests) == 5 * 19
+    assert notes == [
+        "Token prices: 60 of 60 coins could not be fetched "
+        "(HTTP 400, gave up after 5 failed requests in a row)."
+    ]
+
+
+def test_a_chart_without_the_coins_asked_for_is_an_answer_and_not_a_failure(serve_chart):
+    keys = [f"arbitrum:0x{i:040x}" for i in range(60)]
+    server = serve_chart({})  # the server answers every request, and knows none of the coins
+
+    with make_client() as client:
+        series, notes = prices.fetch_series(client, keys)
+
+    assert series == {}
+    assert notes == []
+    assert [len(request) for request in server.requests] == [10] * 6
+
+
 # The estimate for a pool
 
 
@@ -269,6 +343,64 @@ def test_prices_are_asked_for_once_per_token_and_only_for_estimable_pools(make_p
     assert asked == [["arbitrum:0xaaa", "arbitrum:0xbbb", "arbitrum:0xccc"]]
 
 
+def test_the_coins_are_asked_for_in_the_order_of_the_pools(make_pool):
+    first = make_pool(pool_id="a", il_risk=True, underlying_tokens=("0xaaa", "0xbbb"))
+    second = make_pool(pool_id="b", il_risk=True, underlying_tokens=("0xAAA", "0xccc"))
+    asked = []
+
+    def lookup(keys):
+        asked.append(keys)
+        return {}, []
+
+    prices.estimate_volatilities([first, second], lookup)
+    prices.estimate_volatilities([second, first], lookup)
+
+    # so that, if the lookup gives out partway, the pools that came first were estimated
+    assert asked == [
+        ["arbitrum:0xaaa", "arbitrum:0xbbb", "arbitrum:0xccc"],
+        ["arbitrum:0xaaa", "arbitrum:0xccc", "arbitrum:0xbbb"],
+    ]
+
+
+def test_the_count_note_says_how_many_pools_were_estimated_and_how_many_were_not(make_pool):
+    ids = ["a", "b", "c", "d"]
+    pools = [
+        make_pool(pool_id=name, il_risk=True, underlying_tokens=(f"0x{name}1", f"0x{name}2"))
+        for name in ids
+    ]
+    # Pools a and b have 14 daily returns each; c has only one token with prices, d has none.
+    moving = [(START + i * DAY, 1.0 + 0.01 * (-1) ** i) for i in range(15)]
+    flat = [(START + i * DAY, 1.0) for i in range(15)]
+    series = {
+        "arbitrum:0xa1": moving,
+        "arbitrum:0xa2": flat,
+        "arbitrum:0xb1": moving,
+        "arbitrum:0xb2": flat,
+        "arbitrum:0xc1": moving,
+    }
+
+    volatilities, notes = prices.estimate_volatilities(pools, lambda keys: (series, []))
+
+    assert set(volatilities) == {"a", "b"}
+    assert notes == [
+        "Impermanent loss is estimated for 2 of the 4 pools with IL risk and two tokens. The "
+        "other 2 stay IL_UNKNOWN: no usable daily prices for one or both of their two tokens."
+    ]
+
+
+def test_there_is_no_count_note_when_every_pool_was_estimated(make_pool):
+    pool = make_pool(il_risk=True, underlying_tokens=("0xaaa", "0xbbb"))
+    series = {
+        "arbitrum:0xaaa": [(START + i * DAY, 1.0 + 0.01 * (-1) ** i) for i in range(15)],
+        "arbitrum:0xbbb": [(START + i * DAY, 1.0) for i in range(15)],
+    }
+
+    volatilities, notes = prices.estimate_volatilities([pool], lambda keys: (series, []))
+
+    assert len(volatilities) == 1
+    assert notes == []
+
+
 def test_the_lookup_is_not_called_when_no_pool_can_be_estimated(make_pool):
     def lookup(keys):
         raise AssertionError("no prices should have been asked for")
@@ -285,17 +417,19 @@ def test_pools_with_too_little_price_history_are_left_unestimated_and_the_note_s
 
     assert volatilities == {}
     assert notes == [
-        "Impermanent loss is not estimated for 1 pool: no usable daily prices for one of its two "
-        "tokens (IL_UNKNOWN)."
+        "Impermanent loss is estimated for 0 of the 1 pool with IL risk and two tokens. The other "
+        "1 stays IL_UNKNOWN: no usable daily prices for one or both of its two tokens."
     ]
 
 
-def test_the_generic_note_is_left_out_when_the_lookup_already_explained_itself(make_pool):
+def test_the_count_note_follows_what_the_lookup_said_about_itself(make_pool):
     pools = [make_pool(il_risk=True, underlying_tokens=("0xaaa", "0xbbb"))]
 
     _, notes = prices.estimate_volatilities(pools, lambda keys: ({}, ["The lookup failed."]))
 
-    assert notes == ["The lookup failed."]
+    assert notes[0] == "The lookup failed."
+    assert notes[1].startswith("Impermanent loss is estimated for 0 of the 1 pool")
+    assert len(notes) == 2
 
 
 # The real sample
@@ -336,8 +470,8 @@ def test_volatilities_of_the_real_sample_match_a_hand_computed_reference(
     estimable = [p for p in pools if prices.coin_keys(p)]
     assert len(estimable) == 24
     assert notes == [
-        "Impermanent loss is not estimated for 14 pools: no usable daily prices for one of "
-        "their two tokens (IL_UNKNOWN)."
+        "Impermanent loss is estimated for 10 of the 24 pools with IL risk and two tokens. The "
+        "other 14 stay IL_UNKNOWN: no usable daily prices for one or both of their two tokens."
     ]
 
 

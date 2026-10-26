@@ -138,7 +138,8 @@ For each pool:
      concentrated-liquidity pools (Uniswap v3 and v4, Velodrome v3) it is a lower bound. Pools
      with another number of tokens, or without prices, keep `IL_UNKNOWN`.
    - **When:** only for the pools that survive the filters and `--limit` (the ranking is decided
-     without IL; the pools shown are then evaluated and ranked again).
+     without IL; the pools shown are then evaluated and ranked again). Changed in v1.3: every pool
+     that survives the filters is estimated, and the limit is applied last.
    - **Offline:** `--from-file` makes no network calls. `--prices-file` is a saved chart response
      for offline runs; without it IL stays unknown. `tests/fixtures/prices_sample.json` is one,
      for the major tokens of the fixture's pools.
@@ -162,3 +163,40 @@ For each pool:
    and `actions/deploy-pages` (permissions `contents: read`, `pages: write` and `id-token: write`;
    concurrency group `pages`; environment `github-pages`). A fork turns it on under
    Settings > Pages > Source: GitHub Actions.
+
+## v1.3 changes
+
+1. **Exact counts.** The headline "Cost-negative: N" depended on `--limit`: impermanent loss was
+   only estimated for the pools shown, so a pool that loses money only once its IL is counted was
+   not counted unless it was shown. Now:
+   - IL is estimated for every pool that passes the TVL and zero-APY filters, whatever the limit.
+     A live run on 2026-10-26 needed prices for 828 tokens: 83 requests of at most ten coins, each
+     coin asked for once. That took 10 seconds on a fast connection, and a few minutes on a slow
+     one.
+   - The pools are ranked with their IL, and then `--only-negative` and `--limit` cut the list.
+     The counts, the summary by chain and the order of the pools do not depend on the limit, and
+     `--only-negative` finds a pool that only loses money with its IL.
+   - The coins are asked for in the order of a first ranking without IL (the cost-negative pools
+     with the highest advertised APY first), so that if the price service gives out partway, the
+     pools at the top of the table are the ones that were estimated.
+   - **Failing partway:** a failed chart request is skipped as before. If five requests in a row
+     get no answer at all, the rest are not asked for. A request that the server rejects (HTTP 400)
+     is split in two, and it counts as failed only if none of its parts got an answer, so a few bad
+     coins do not stop the lookup, but a server that rejects everything does. A chart without the
+     coins asked for is an answer. The pools that were not estimated stay `IL_UNKNOWN`, and the
+     notes say "estimated for X of the Y pools with IL risk and two tokens", so the counts are
+     then lower bounds for those pools.
+   - `counts.il_risk`, `counts.il_estimated` and `counts.il_unknown` now count all the pools
+     analysed, not only the pools shown. The text line says "of the N analysed pools with IL risk".
+2. **A summary by chain.** For each scanned chain (in the order given), the pools analysed, the
+   cost-negative count and its share, and how many of the pools with IL risk have an IL estimate,
+   with a total row. It is in the text output (under the counts), in the JSON (`chain_summary`,
+   keyed by chain, with `cost_negative_share` from 0 to 1 and `null` when nothing was analysed)
+   and in the HTML page, above the table of pools. The pages workflow keeps its command,
+   `report --out site/index.html --limit 100`.
+3. **Outliers last.** With impermanent loss estimated for every pool, the top of the live page
+   filled with pools that advertise a huge APY and lose it to IL: on 2026-10-26, 58 of the first
+   100 rows were flagged `APY_OUTLIER`. Their APY is not to be trusted, and their volatility is
+   where the small-move IL formula is least reliable. So in each group (cost-negative, then the
+   rest) the pools flagged `APY_OUTLIER` now come after the others, in the same order among
+   themselves. They are still counted and still shown.

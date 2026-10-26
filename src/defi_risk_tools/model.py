@@ -6,7 +6,7 @@ simple (not compounded) and the APY is assumed to stay constant over the holding
 
 import math
 import statistics
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from defi_risk_tools.data import Pool
@@ -289,13 +289,52 @@ def rank(results: list[PoolResult]) -> list[PoolResult]:
     """Put the most misleading pools first.
 
     Cost-negative pools lead, and among them the ones that advertise the highest APY: they look
-    the best and lose money. The other pools follow, by net APY, highest first. Ties are broken the
-    same way every time, so the same data always gives the same order.
+    the best and lose money. The other pools follow, by net APY, highest first. In each group the
+    pools whose APY is an outlier (`APY_OUTLIER`) come last: their APY is not to be trusted, so it
+    should not decide what leads. Ties are broken the same way every time, so the same data always
+    gives the same order.
     """
 
     def key(result: PoolResult) -> tuple:
         pool = result.pool
-        order = (0, -pool.apy) if result.cost_negative else (1, -result.net_apy)
+        outlier = APY_OUTLIER in result.flags
+        order = (0, outlier, -pool.apy) if result.cost_negative else (1, outlier, -result.net_apy)
         return (*order, -pool.tvl_usd, pool.chain, pool.project, pool.symbol, pool.pool_id)
 
     return sorted(results, key=key)
+
+
+@dataclass(frozen=True)
+class ChainSummary:
+    """How the pools of one chain came out: the numbers behind the headline counts."""
+
+    chain: str
+    analysed: int
+    cost_negative: int
+    il_risk: int  # pools that carry impermanent loss risk
+    il_estimated: int  # of those, the ones whose IL was estimated from token prices
+    il_unknown: int  # and the ones that have no IL figure at all
+
+    @property
+    def cost_negative_share(self) -> float | None:
+        """The share of the analysed pools that are cost-negative, from 0 to 1. None if none."""
+        return self.cost_negative / self.analysed if self.analysed else None
+
+
+def summarise_chains(results: Iterable[PoolResult], chains: Sequence[str]) -> list[ChainSummary]:
+    """One summary for each of `chains`, in that order, over every result on that chain."""
+    by_chain: dict[str, list[PoolResult]] = {chain: [] for chain in chains}
+    for result in results:
+        if result.pool.chain in by_chain:
+            by_chain[result.pool.chain].append(result)
+    return [
+        ChainSummary(
+            chain=chain,
+            analysed=len(group),
+            cost_negative=sum(result.cost_negative for result in group),
+            il_risk=sum(IL_RISK in result.flags for result in group),
+            il_estimated=sum(IL_ESTIMATED in result.flags for result in group),
+            il_unknown=sum(IL_UNKNOWN in result.flags for result in group),
+        )
+        for chain, group in by_chain.items()
+    ]

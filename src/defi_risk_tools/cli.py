@@ -1,5 +1,6 @@
 """The `yield-scan` command line."""
 
+import math
 from contextlib import ExitStack
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -62,7 +63,13 @@ MinTvlOption = Annotated[
     ),
 ]
 LimitOption = Annotated[
-    int, typer.Option("--limit", min=1, help="Show at most this many pools.", show_default=True)
+    int,
+    typer.Option(
+        "--limit",
+        min=1,
+        help="Show at most this many pools. The counts always cover every pool analysed.",
+        show_default=True,
+    ),
 ]
 OnlyNegativeOption = Annotated[
     bool, typer.Option("--only-negative", help="Show only cost-negative pools.")
@@ -185,8 +192,10 @@ def build_scan(
 ) -> Scan:
     """Fetch (or read) the pools, run the model on the ones in scope and rank the results.
 
-    Impermanent loss is estimated last, and only for the pools that are going to be shown, so that
-    token prices are looked up for a handful of pools and not for thousands.
+    Impermanent loss is estimated for every pool in scope, not only for the ones that are going to
+    be shown: the counts and the order of the pools must not depend on `limit`. The pools are asked
+    about in the order of a first ranking without impermanent loss, so that if the price service
+    gives out partway, the pools at the top are the ones that were estimated.
     """
     try:
         wanted = [costs.canonical_chain(name) for name in chains or costs.DEFAULT_CHAINS]
@@ -207,30 +216,25 @@ def build_scan(
         selection = model.select_pools(
             parsed.pools, chains=wanted, min_tvl_usd=min_tvl, include_zero_apy=include_zero_apy
         )
-        ranked = model.rank([evaluate(pool) for pool in selection.pools])
-        cost_negative = [result for result in ranked if result.cost_negative]
-        visible = (cost_negative if only_negative else ranked)[:limit]
-
+        without_il = model.rank([evaluate(pool) for pool in selection.pools])
         lookup, price_source = _price_lookup(saved_prices, prices_file, client)
-        volatilities, il_notes = prices.estimate_volatilities([r.pool for r in visible], lookup)
+        volatilities, il_notes = prices.estimate_volatilities(
+            [result.pool for result in without_il], lookup
+        )
 
     # A pool with a measured volatility is evaluated again, now with its impermanent loss. That can
-    # make it cost-negative, so the pools shown are ranked again.
-    shown = model.rank(
+    # make it cost-negative, so all the pools are ranked again, and then the limit is applied.
+    ranked = model.rank(
         [
             evaluate(replace(result.pool, il_volatility=volatilities[result.pool.pool_id]))
             if result.pool.pool_id in volatilities
             else result
-            for result in visible
+            for result in without_il
         ]
     )
-    cost_negative_count = (
-        len(cost_negative)
-        - sum(result.cost_negative for result in visible)
-        + sum(result.cost_negative for result in shown)
-    )
+    cost_negative = [result for result in ranked if result.cost_negative]
     return Scan(
-        rows=shown,
+        rows=(cost_negative if only_negative else ranked)[:limit],
         assumptions=assumptions,
         min_tvl_usd=min_tvl,
         include_zero_apy=include_zero_apy,
@@ -238,7 +242,8 @@ def build_scan(
         source=f"file {from_file}" if from_file else "DeFiLlama yields API (live)",
         price_source=price_source,
         analysed=len(ranked),
-        cost_negative=cost_negative_count,
+        cost_negative=len(cost_negative),
+        chain_summaries=model.summarise_chains(ranked, wanted),
         below_min_tvl=selection.below_min_tvl,
         zero_apy=selection.zero_apy,
         skipped_entries=parsed.skipped,
@@ -270,7 +275,18 @@ def _price_lookup(
     if saved is not None:
         return (lambda keys: (saved, [])), f"file {path}"
     if client is not None:
-        return (lambda keys: prices.fetch_series(client, keys)), "DeFiLlama chart API (live)"
+
+        def live(keys: list[str]) -> tuple[dict[str, model.PriceSeries], list[str]]:
+            requests = math.ceil(len(keys) / prices.MAX_COINS_PER_REQUEST)
+            if requests > 1:  # the progress goes to stderr, so that the output stays clean
+                typer.echo(
+                    f"Looking up 30 days of prices for {len(keys)} tokens ({requests} requests) "
+                    "to estimate impermanent loss.",
+                    err=True,
+                )
+            return prices.fetch_series(client, keys)
+
+        return live, "DeFiLlama chart API (live)"
     return (lambda keys: ({}, [NO_PRICES_NOTE])), "none (offline run without --prices-file)"
 
 

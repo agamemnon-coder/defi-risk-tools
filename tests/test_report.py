@@ -1,5 +1,6 @@
 """Rendering: number formats, the JSON document, and the HTML page."""
 
+import dataclasses
 import json
 import re
 from datetime import date
@@ -9,7 +10,13 @@ from html_tools import inspect_page
 
 from defi_risk_tools import report
 from defi_risk_tools.costs import resolve_tx_costs
-from defi_risk_tools.model import Assumptions, evaluate_pool, rank
+from defi_risk_tools.model import (
+    Assumptions,
+    ChainSummary,
+    evaluate_pool,
+    rank,
+    summarise_chains,
+)
 from defi_risk_tools.report import Scan
 
 DEFILLAMA = "https://defillama.com/"
@@ -18,16 +25,22 @@ FORBIDDEN_TAGS = {"script", "link", "img", "iframe", "object", "embed", "video",
 
 @pytest.fixture
 def build_scan(make_pool):
-    """Turn pools into a `Scan` the way the CLI does, with the default costs."""
+    """Turn pools into a `Scan` the way the CLI does, with the default costs.
 
-    def build(pools, notes=None) -> Scan:
+    All the pools are counted; only the first `limit` of them (best first) are shown.
+    """
+
+    def build(pools, notes=None, chains=("Arbitrum",), limit=None) -> Scan:
         assumptions = Assumptions()
-        tx_costs, cost_notes = resolve_tx_costs(["Arbitrum"], client=None)
+        tx_costs, cost_notes = resolve_tx_costs(list(chains), client=None)
         results = rank(
-            [evaluate_pool(pool, assumptions, tx_costs["Arbitrum"].usd) for pool in pools]
+            [
+                evaluate_pool(pool, assumptions, tx_costs.get(pool.chain, tx_costs[chains[0]]).usd)
+                for pool in pools
+            ]
         )
         return Scan(
-            rows=results,
+            rows=results[:limit],
             assumptions=assumptions,
             min_tvl_usd=100_000.0,
             include_zero_apy=False,
@@ -36,6 +49,7 @@ def build_scan(make_pool):
             price_source="a prices test",
             analysed=len(results),
             cost_negative=sum(result.cost_negative for result in results),
+            chain_summaries=summarise_chains(results, list(chains)),
             below_min_tvl=0,
             zero_apy=0,
             skipped_entries=0,
@@ -221,7 +235,7 @@ def test_json_leaves_gas_fields_empty_on_a_fixed_fee_chain(make_pool):
     scan = Scan(
         rows=[], assumptions=Assumptions(), min_tvl_usd=0.0, include_zero_apy=True,
         tx_costs=tx_costs, source="t", price_source="p", analysed=0, cost_negative=0,
-        below_min_tvl=0, zero_apy=0, skipped_entries=0, notes=[],
+        chain_summaries=[], below_min_tvl=0, zero_apy=0, skipped_entries=0, notes=[],
     )  # fmt: skip
 
     solana = json.loads(report.render_json(scan))["chain_costs"]["Solana"]
@@ -341,7 +355,10 @@ def test_the_il_coverage_counts_what_was_estimated_among_the_pools_with_il_risk(
 def test_the_text_report_says_how_many_pools_have_an_estimated_il(mixed_il_scan):
     text = report.render_text(mixed_il_scan)
 
-    assert "Impermanent loss: estimated from token prices for 1 of the 2 pools shown" in text
+    assert (
+        "Impermanent loss: estimated from token prices for 1 of the 2 analysed pools with IL risk."
+        in text
+    )
     assert "Prices: a prices test" in text
 
 
@@ -378,4 +395,192 @@ def test_the_limitations_say_what_the_estimate_is_and_is_not():
     assert "50/50 constant-product pool" in text
     assert "lower bound" in text
     assert "Uniswap v3 and v4, Velodrome v3" in text
-    assert "only looked up for the pools shown" in text
+    assert "looked up for every pool analysed, not only the pools shown" in text
+    assert "the counts and the order do not depend on the limit" in text
+    assert "cost-negative counts are lower bounds" in text
+
+
+# The summary by chain
+
+
+@pytest.fixture
+def three_chain_scan(build_scan, make_pool):
+    """Six pools on two of the three chains scanned, of which only the first two are shown.
+
+    By hand, for $1,000 held 30 days (gas is $0.0945 on Arbitrum and $0.07035 on Base for three
+    transactions, a multi-asset pool swaps $3.00, and IL at a volatility of 0.4 is
+    1000 * 0.4**2 * (30/365) / 8 = $1.64):
+    a1 pays 5% on one asset: +$4.02.  a2 pays 2% and swaps: 1.64 - 0.09 - 3.00 = -$1.45.
+    a3 pays 20%: 16.44 - 0.09 - 3.00 - 1.64 = +$11.70, with an estimated IL.
+    a4 is a2 with IL risk and no estimate: -$1.45.  b1 pays 1% and swaps: -$2.25.  b2 pays 1% on
+    one asset: +$0.75.
+    """
+    multi = {"stablecoin": False, "exposure": "multi"}
+    pools = [
+        make_pool(pool_id="a1", apy_base=5.0),
+        make_pool(pool_id="a2", apy_base=2.0, **multi),
+        make_pool(pool_id="a3", apy_base=20.0, il_risk=True, il_volatility=0.4, **multi),
+        make_pool(pool_id="a4", apy_base=2.0, il_risk=True, **multi),
+        make_pool(pool_id="b1", chain="Base", apy_base=1.0, **multi),
+        make_pool(pool_id="b2", chain="Base", apy_base=1.0),
+    ]
+    return build_scan(pools, chains=("Arbitrum", "Base", "Solana"), limit=2)
+
+
+def test_the_shares_are_worked_out_from_the_counts():
+    assert report.format_share(ChainSummary("x", 3, 1, 0, 0, 0)) == "33.3%"
+    assert report.format_share(ChainSummary("x", 4, 4, 0, 0, 0)) == "100.0%"
+    assert report.format_share(ChainSummary("x", 0, 0, 0, 0, 0)) == "-"  # nothing to divide
+
+
+def test_the_total_adds_the_chains_up():
+    total = report.total_summary(
+        [ChainSummary("a", 4, 2, 2, 1, 1), ChainSummary("b", 2, 1, 0, 0, 0)]
+    )
+
+    assert (total.analysed, total.cost_negative, total.il_risk) == (6, 3, 2)
+    assert (total.il_estimated, total.il_unknown) == (1, 1)
+    assert total.cost_negative_share == 0.5
+
+
+def test_the_text_report_counts_every_pool_by_chain_whatever_is_shown(three_chain_scan):
+    il_line = (
+        "Impermanent loss: estimated from token prices for 1 of the 2 analysed pools with IL risk."
+    )
+
+    lines = report.render_text(three_chain_scan).splitlines()
+
+    assert "Pools analysed: 6 on Arbitrum, Base, Solana. Cost-negative: 3. Shown: 2." in lines
+    start = lines.index("By chain")
+    assert lines[start - 2] == il_line  # the table follows the counts it breaks down
+    table = lines[start + 1 : start + 7]
+    cells = [re.split(r"\s{2,}", line.strip()) for line in table]
+    assert cells[0] == ["chain", "analysed", "cost-negative", "share", "IL estimated"]
+    assert set("".join(cells[1])) == {"-"}  # the rule
+    assert cells[2:] == [
+        ["Arbitrum", "4", "2", "50.0%", "1 of 2"],
+        ["Base", "2", "1", "50.0%", "0 of 0"],
+        ["Solana", "0", "0", "-", "0 of 0"],
+        ["all chains", "6", "3", "50.0%", "1 of 2"],
+    ]
+    assert len({len(line) for line in table}) == 1  # the numbers line up on the right
+    assert lines[start + 7] == ""  # and a blank line ends the table
+
+
+def test_the_text_report_has_no_by_chain_table_without_summaries(build_scan):
+    scan = build_scan([])
+    without = dataclasses.replace(scan, chain_summaries=[])
+
+    assert "By chain" in report.render_text(scan)
+    assert "By chain" not in report.render_text(without)
+
+
+def test_json_has_a_summary_for_each_chain_and_counts_the_il_of_every_pool(three_chain_scan):
+    document = json.loads(report.render_json(three_chain_scan))
+
+    assert document["counts"] == {
+        "analysed": 6,
+        "cost_negative": 3,
+        "shown": 2,
+        "below_min_tvl": 0,
+        "zero_apy": 0,
+        "skipped_entries": 0,
+        "il_risk": 2,
+        "il_estimated": 1,
+        "il_unknown": 1,
+    }
+    assert list(document["chain_summary"]) == ["Arbitrum", "Base", "Solana"]
+    assert document["chain_summary"] == {
+        "Arbitrum": {
+            "analysed": 4,
+            "cost_negative": 2,
+            "cost_negative_share": 0.5,
+            "il_risk": 2,
+            "il_estimated": 1,
+            "il_unknown": 1,
+        },
+        "Base": {
+            "analysed": 2,
+            "cost_negative": 1,
+            "cost_negative_share": 0.5,
+            "il_risk": 0,
+            "il_estimated": 0,
+            "il_unknown": 0,
+        },
+        "Solana": {
+            "analysed": 0,
+            "cost_negative": 0,
+            "cost_negative_share": None,
+            "il_risk": 0,
+            "il_estimated": 0,
+            "il_unknown": 0,
+        },
+    }
+    assert len(document["pools"]) == 2
+
+
+def test_json_rounds_a_share_that_does_not_divide_evenly(build_scan, make_pool):
+    multi = {"stablecoin": False, "exposure": "multi"}
+    pools = [make_pool(pool_id=f"p{i}", apy_base=2.0, **multi) for i in range(2)]
+    pools.append(make_pool(pool_id="fine", apy_base=5.0))
+
+    document = json.loads(report.render_json(build_scan(pools)))
+
+    assert document["chain_summary"]["Arbitrum"]["cost_negative_share"] == 0.666667  # 2 of 3
+
+
+def html_cells(html: str, row_name: str) -> list[str]:
+    """The numbers in the row of the by-chain table that starts with `row_name`."""
+    match = re.search(rf'<th scope="row">{row_name}</th>(.*?)</tr>', html)
+    assert match, row_name
+    return re.findall(r'<td class="num">([^<]*)</td>', match.group(1))
+
+
+def test_html_puts_the_summary_by_chain_above_the_table_of_pools(three_chain_scan):
+    page = report.render_html(three_chain_scan, date(2026, 10, 26))
+
+    summary = page.index("<h2>Summary</h2>")
+    by_chain = page.index("<h2>By chain</h2>")
+    pools = page.index("<h2>Pools</h2>")
+    pool_table = page.index('<caption class="sr">Pools, cost-negative first')
+    assert summary < by_chain < pools < pool_table
+    assert "Cost-negative: 3. Shown: 2." in page[summary:by_chain]
+    section = page[by_chain:pools]
+    assert re.findall(r'<th scope="col"[^>]*>([^<]*)</th>', section) == [
+        "Chain",
+        "Analysed",
+        "Cost-negative",
+        "Share",
+        "IL estimated",
+    ]
+    assert html_cells(section, "Arbitrum") == ["4", "2", "50.0%", "1 of 2"]
+    assert html_cells(section, "Base") == ["2", "1", "50.0%", "0 of 0"]
+    assert html_cells(section, "Solana") == ["0", "0", "-", "0 of 0"]
+    assert html_cells(section[section.index("<tfoot>") :], "all chains") == [
+        "6",
+        "3",
+        "50.0%",
+        "1 of 2",
+    ]
+    assert page.count('<tr class="cost-negative">') == 2  # the table of pools holds two rows
+
+
+def test_html_escapes_the_chain_names_of_the_summary(build_scan):
+    scan = dataclasses.replace(
+        build_scan([]),
+        chain_summaries=[ChainSummary("<script>alert(1)</script>", 1, 1, 0, 0, 0)],
+    )
+
+    page = report.render_html(scan, date(2026, 10, 26))
+
+    assert "script" not in inspect_page(page).tags
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page
+
+
+def test_html_has_no_by_chain_section_without_summaries(build_scan):
+    scan = dataclasses.replace(build_scan([]), chain_summaries=[])
+
+    page = report.render_html(scan, date(2026, 10, 26))
+
+    assert "By chain" not in page
+    assert "<h2>Pools</h2>" in page
