@@ -17,8 +17,9 @@ few weeks, these costs can eat the whole yield:
 
 - **Gas.** Approving, depositing, withdrawing and claiming rewards are all transactions, and
   Ethereum L2s also pay a data fee to Ethereum.
-- **Swaps.** If the pool needs a token you do not hold, you pay swap fees and slippage on the way
-  in and again on the way out.
+- **Swaps.** A pool that holds several assets needs a mix of them, so part of your deposit is
+  swapped on the way in and swapped back on the way out, with swap fees and slippage each time.
+  Lending a single asset that you already hold needs no swap.
 - **Reward tokens.** Many APYs are mostly paid in a reward token, and reward tokens tend to fall.
 - **Impermanent loss.** Providing liquidity to a volatile pair can lose more than the fees earn.
 
@@ -41,22 +42,22 @@ $ uv run yield-scan scan --from-file tests/fixtures/pools_sample.json \
 ```text
 Cost-Negative Yield Scanner  -  estimates only, not financial advice
 
-chain       project            symbol               TVL  APY (base+reward)  costs  net APY  break-even size  flags
-----------  -----------------  ---------------  -------  -----------------  -----  -------  ---------------  -------------------------------------------------
-Solana      loopscale-lending  USD.INFRA          $8.0M          2.99+5.25  $6.02    -1.7%            never  COST_NEGATIVE,REWARD_DEPENDENT
-Arbitrum    gmx-evm            ETH-USDC          $47.5M          6.77+0.00  $7.73    -2.6%            never  COST_NEGATIVE,IL_RISK,IL_ESTIMATED
-Base        morpho-blue        GROVE-STEAKUSDC  $438.5M          4.67+0.00  $6.07    -2.7%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
-OP Mainnet  morpho-blue        RE7WETH            $3.2M          0.82+2.92  $6.08    -5.1%            never  COST_NEGATIVE,REWARD_DEPENDENT
-Base        aave-v3            WETH              $42.1M          1.39+1.86  $6.09    -5.1%            never  COST_NEGATIVE,REWARD_DEPENDENT
-Arbitrum    morpho-blue        KPK-EURE-YIELD     $1.6M          0.13+2.87  $6.13    -5.9%            never  COST_NEGATIVE,REWARD_DEPENDENT,IL_RISK,IL_UNKNOWN
-Arbitrum    gmx-evm            WBTC.B-USDC       $56.9M          2.54+0.00  $6.79    -5.7%            never  COST_NEGATIVE,IL_RISK,IL_ESTIMATED
-OP Mainnet  uniswap-v3         USDC-ZCHF          $1.5M          1.28+0.00  $6.06    -6.1%            never  COST_NEGATIVE
-Base        aerodrome-v1       VVV-DIEM           $9.0M          0.00+0.80  $6.09    -7.0%            never  COST_NEGATIVE,REWARD_DEPENDENT,IL_RISK,IL_UNKNOWN
-Solana      kamino-lend        BONKSOL            $5.7M          0.00+0.33  $6.02    -7.2%            never  COST_NEGATIVE,REWARD_DEPENDENT,APY_OUTLIER
+chain       project       symbol              TVL  APY (base+reward)  costs  net APY  break-even size  flags
+----------  ------------  --------------  -------  -----------------  -----  -------  ---------------  -------------------------------------------------
+Arbitrum    morpho-blue   KPK-EURE-YIELD    $1.6M          0.13+2.87  $3.13    -2.2%            never  COST_NEGATIVE,REWARD_DEPENDENT,IL_RISK,IL_UNKNOWN
+Arbitrum    gmx-evm       WBTC.B-USDC      $56.9M          2.54+0.00  $3.79    -2.1%            never  COST_NEGATIVE,IL_RISK,IL_ESTIMATED
+OP Mainnet  uniswap-v3    USDC-ZCHF         $1.5M          1.28+0.00  $3.06    -2.4%            never  COST_NEGATIVE
+Base        aerodrome-v1  VVV-DIEM          $9.0M          0.00+0.80  $3.09    -3.4%            never  COST_NEGATIVE,REWARD_DEPENDENT,IL_RISK,IL_UNKNOWN
+Base        uniswap-v3    JITOSOL-CBBTC    $14.0M          0.14+0.00  $3.07    -3.6%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
+Solana      raydium-amm   XDC-USDC         $34.9M          0.04+0.00  $3.02    -3.6%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
+OP Mainnet  uniswap-v4    USDC-FNX        $645.3k          0.04+0.00  $3.06    -3.7%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
+Solana      raydium-amm   NIGHT-USDC       $39.0M          0.03+0.00  $3.02    -3.6%            never  COST_NEGATIVE,APY_OUTLIER,IL_RISK,IL_UNKNOWN
+Solana      raydium-amm   USDC-AKE         $37.9M          0.03+0.00  $3.02    -3.6%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
+Solana      raydium-amm   USDC-PHA         $71.0M          0.02+0.00  $3.02    -3.6%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
 
-Pools analysed: 53 on Arbitrum, OP Mainnet, Base, Solana. Cost-negative: 19. Shown: 10.
+Pools analysed: 53 on Arbitrum, OP Mainnet, Base, Solana. Cost-negative: 12. Shown: 10.
 Left out: 0 under the TVL floor, 8 advertising an APY of 0 or less, 0 unreadable entries in the source.
-Impermanent loss: estimated from token prices for 2 of the 5 pools shown with IL risk.
+Impermanent loss: estimated from token prices for 1 of the 9 pools shown with IL risk.
 Source: file tests/fixtures/pools_sample.json
 Prices: file tests/fixtures/prices_sample.json
 Sorted with cost-negative pools first, the highest advertised APY leading, then the other pools by net APY, highest first.
@@ -71,17 +72,19 @@ chart response from the same day with 30 daily prices of WETH, USDC, WBTC and cb
 options make the run offline: no network calls, so you get the same output as above.
 
 The first rows are the most misleading pools: they advertise a real APY and lose money anyway.
-USD.INFRA on Solana shows 8.24% a year, but 5.25 points of that are reward tokens (half of which
-are assumed lost) and getting in and out of it costs $6.00 in swaps, so $1,000 held for 30 days
-ends $1.41 down. "Net APY" annualises the result: -1.7% a year. Pools that advertise no APY at
-all are left out (8 of the 61 here), because they mislead nobody; `--include-zero-apy` brings them
-back.
+KPK-EURE-YIELD on Arbitrum shows 3.00% a year, but 2.87 points of that are reward tokens (half of
+which are assumed lost), and as a multi-asset pool it swaps half of a $1,000 deposit on the way in
+and back on the way out, which costs $3.00. Held for 30 days, $1,000 ends $1.84 down. "Net APY"
+annualises the result: -2.2% a year. Pools that advertise no APY at all are left out (8 of the 61
+here), because they mislead nobody; `--include-zero-apy` brings them back. A single-asset pool,
+such as lending WETH on Aave, pays no swap, because you are assumed to hold the asset: only 12 of
+the 53 pools lose money.
 
-Two rows show the impermanent loss estimate. GMX ETH-USDC and GMX WBTC.B-USDC are flagged
-`IL_ESTIMATED`: over the last 30 days the WETH/USDC price ratio had a volatility of 40% a year, so
-$1,000 held for 30 days is expected to lose 1000 × 0.40² × 30/365 / 8 = $1.64 to impermanent loss,
-and the costs go from $6.09 to $7.73. The three other pools with IL risk stay `IL_UNKNOWN`: two
-hold a single token, and the tokens of VVV-DIEM have no prices in the saved file.
+One row shows the impermanent loss estimate. GMX WBTC.B-USDC is flagged `IL_ESTIMATED`: over the
+last 30 days the WBTC/USDC price ratio had a volatility of 26% a year, so $1,000 held for 30 days
+is expected to lose 1000 × 0.26² × 30/365 / 8 = $0.69 to impermanent loss, and the costs go from
+$3.09 to $3.79. The eight other pools shown with IL risk stay `IL_UNKNOWN`: one holds a single
+token, and seven have a token with no prices in the saved file.
 
 A sample report built from the same data is in [`docs/report.html`](docs/report.html).
 
@@ -186,7 +189,7 @@ For every pool, with position size P, holding period T (in days) and reward hair
 
 1. **Gross yield** = `P × apyBase/100 × T/365 + P × apyReward/100 × T/365 × (1 − h)`
 2. **Gas** = `(enter + exit + claims) × cost of one transaction`
-3. **Swaps** = `2 × 0.3% × P`, unless the pool is a single-asset stablecoin pool
+3. **Swaps** = `0` for a single-asset pool, `2 × 0.3% × P × 0.5` for a multi-asset pool
 4. **Impermanent loss** = `P × |il7d|/100 × T/7` if DeFiLlama gives `il7d`; otherwise, for a pool
    with two priced tokens, `P × σ² × T/365 / 8`, where σ is the annualised volatility of the price
    ratio of the two tokens. Capped at 50% of P.
@@ -195,18 +198,18 @@ For every pool, with position size P, holding period T (in days) and reward hair
 
 ### Worked example
 
-Aave v3 WETH on Base, from the sample data. DeFiLlama shows 3.25% APY: 1.39% base plus 1.86% in
-reward tokens. For $1,000 held 30 days:
+Two pools from the sample data, for $1,000 held 30 days. They show both sides of the swap rule.
 
-| Step | Result |
-| --- | --- |
-| Gross yield | $1,000 × 30/365 × (1.39% + 1.86% × (1 − 0.5)) = **$1.91** |
-| Gas | 4 transactions (approve, deposit, withdraw, one claim) × $0.0234 = **$0.09** |
-| Swaps | WETH is not a stablecoin: 2 × 0.3% × $1,000 = **$6.00** |
-| Impermanent loss | no IL risk, so **$0.00** |
-| Net | $1.91 − $0.09 − $6.00 = **−$4.19**, which is **−5.1%** net APY |
-| Break-even size | **never**: 30 days of yield per dollar is smaller than the swap cost per dollar, so no size fixes it |
-| Break-even days | **97**: holding for 97 days at this size pays for the swaps and the extra claims |
+| Step | Aave v3 WETH, Base (single asset) | Uniswap v3 USDC-ZCHF, OP Mainnet (multi-asset) |
+| --- | --- | --- |
+| Advertised APY | 3.25%: 1.39% base plus 1.86% in reward tokens | 1.28% |
+| Gross yield | $1,000 × 30/365 × (1.39% + 1.86% × (1 − 0.5)) = **$1.9075** | $1,000 × 30/365 × 1.28% = **$1.0547** |
+| Gas | 4 transactions (approve, deposit, withdraw, one claim) × $0.02345 = **$0.0938** | 3 transactions × $0.020575 = **$0.0617** |
+| Swaps | **none**: you hold WETH, and lending it needs no swap | half of $1,000 is swapped each way: 2 × 0.3% × $500 = **$3.00** |
+| Impermanent loss | no IL risk: **$0.00** | no IL risk: **$0.00** |
+| Net | **+$1.8137**, which is **+2.2%** net APY | **−$2.0071**, which is **−2.4%** net APY |
+| Break-even size | **$49**: gas / (yield per dollar over 30 days) | **never**: 0.1% of yield per dollar against 0.3% of swaps |
+| Break-even days | **2** | **88**: holding for 88 days at this size pays for the swaps |
 
 ### Assumptions
 
@@ -224,11 +227,11 @@ they live in `Assumptions` in `src/defi_risk_tools/model.py` and the cost table 
 | Transactions | 2 to enter (approve and deposit), 1 to exit, and 1 claim for every started 30 days while the reward APY is above 0 (so 3 or 4 transactions at 30 days, 5 at 31 to 60 days with rewards, and so on). |
 | Cost of one EVM transaction | `gas units × gas price × price of ETH + L1 data fee`. 250,000 gas units on every L2. The gas price is one `eth_gasPrice` call at run time. The L1 data fee is a flat $0.02 per transaction: a rough estimate, not a measurement. |
 | Cost of one Solana transaction | A fixed 0.00005 SOL (ten times the 5,000 lamport base fee, to leave room for a priority fee) times the price of SOL. |
-| Swaps | You are assumed to hold stablecoins and nothing else. Every pool except a single-asset stablecoin pool (`stablecoin` true and `exposure` single) needs one swap in and one swap out, each costing 0.3% of the position (swap fee plus slippage). The rate is flat: it does not depend on the token, the pool's depth or your size. |
+| Swaps | A single-asset pool (`exposure` = `single`) needs no swap, whatever the asset: you are assumed to hold it. A multi-asset pool takes a mix of tokens, so half of the position is swapped into the others on the way in and swapped back on the way out: `2 × 0.3% × P × 0.5`. An exposure that is missing or unknown counts as multi-asset. The 0.3% (swap fee plus slippage) and the one half are flat: they do not depend on the token, the pool's depth or your size, and one half is exact only for a pool of two tokens at equal weights. |
 | Impermanent loss | Only for pools with `ilRisk` = yes. If DeFiLlama has a 7-day figure `il7d` (it had none for any pool when this was written), it is scaled linearly to the holding period: `P × \|il7d\|/100 × T/7`. Otherwise, if the pool holds exactly two tokens with prices, it is **estimated**: take 30 days of daily prices of both tokens, the daily log returns of their price ratio, and their sample standard deviation times √365 (σ). The expected loss is then `P × σ² × T/365 / 8`, the small-move result for a 50/50 constant-product pool. Both are capped at 50% of P. The estimate assumes that the volatility of the last 30 days continues, needs at least 14 daily returns, and is a **lower bound for concentrated-liquidity pools** (Uniswap v3 and v4, Velodrome v3 and similar), whose positions can leave their range. With no figure and no estimate, no IL cost is added and the pool is flagged `IL_UNKNOWN`. |
 | Prices are looked up for the pools shown | The ranking, `--only-negative` and `--limit` are decided first, without impermanent loss. Then prices are looked up for the pools that remain, those pools are evaluated again with their IL and ranked again. So a pool that only loses money once IL is counted can be missing from a short list, and a larger `--limit` widens the search. |
 | What is not counted | Deposit or withdrawal fees that are not already in the APY, price impact, bridging, Solana account rent, taxes, lockups, depegs and smart contract risk. |
-| Net APY | One-off costs annualised: a loss of $6 on $1,000 over 30 days is shown as −7.3% a year. Short holds therefore look more extreme than long ones. |
+| Net APY | One-off costs annualised: a loss of $3 on $1,000 over 30 days is shown as −3.7% a year. Short holds therefore look more extreme than long ones. |
 | TVL floor | Pools with less than $100,000 TVL are left out (`--min-tvl`). |
 | Zero-APY pools | Pools whose advertised `apy` is 0 or less are left out (`--include-zero-apy` keeps them). The count is reported. |
 | Data | DeFiLlama's values are taken as given. An entry that cannot be read (a missing id or TVL, a text where a number should be, no APY at all) is skipped and counted in the report. |
@@ -300,6 +303,8 @@ Please read these before relying on any number.
 - **Costs are rough.** Gas units are the same for every transaction, the L1 data fee is a flat
   $0.02, and the swap rate is flat. Real costs depend on the transaction, the congestion at the
   moment, the route and your size. Offline runs use stale default prices.
+- **A single-asset pool is assumed to need no swap**, because you are assumed to hold its asset. If
+  you have to buy the asset first, that swap is not counted, and the pool costs more than shown.
 - **The reward haircut is a guess.** Some reward tokens hold their price and many do not.
 - **Everything else that can go wrong is outside the model:** smart contract bugs, depegs, hacks,
   withdrawal limits, taxes and your own mistakes.

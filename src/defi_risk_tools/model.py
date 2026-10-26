@@ -51,7 +51,8 @@ class Assumptions:
     size_usd: float = 1_000.0  # position size P
     days: int = 30  # holding period T
     haircut: float = 0.5  # share of the reward APY assumed lost as reward tokens fall
-    swap_rate: float = 0.003  # swap fee plus slippage, each way, as a share of the position
+    swap_rate: float = 0.003  # swap fee plus slippage, as a share of the amount swapped
+    multi_asset_swap_share: float = 0.5  # share of the position swapped to enter a multi-asset pool
     enter_txs: int = 2  # approve and deposit
     exit_txs: int = 1
     claim_every_days: int = 30  # one claim per started period, while the pool pays rewards
@@ -64,6 +65,8 @@ class Assumptions:
             raise ValueError("days must be at least 1")
         if not 0 <= self.haircut <= 1:
             raise ValueError("haircut must be between 0 and 1")
+        if not 0 <= self.multi_asset_swap_share <= 1:
+            raise ValueError("multi_asset_swap_share must be between 0 and 1")
 
 
 @dataclass(frozen=True)
@@ -91,9 +94,14 @@ class PoolResult:
         return COST_NEGATIVE in self.flags
 
 
-def needs_swap(pool: Pool) -> bool:
-    """Only a single-asset stablecoin pool is assumed to take the user's deposit as it is."""
-    return not (pool.stablecoin and pool.exposure == "single")
+def swapped_share(pool: Pool, a: Assumptions) -> float:
+    """The share of the position that is swapped to enter the pool, and again to leave it.
+
+    A single-asset pool takes the asset itself, which the user is assumed to hold: no swap, whatever
+    the asset. Any other pool is multi-asset, and so is one whose exposure is not known. It takes a
+    mix of tokens, so part of the position is swapped into the others.
+    """
+    return 0.0 if pool.exposure == "single" else a.multi_asset_swap_share
 
 
 def claim_transactions(pool: Pool, days: int, a: Assumptions) -> int:
@@ -117,8 +125,8 @@ def gas_cost_usd(pool: Pool, days: int, tx_cost_usd: float, a: Assumptions) -> f
 
 
 def swap_cost_usd(pool: Pool, size_usd: float, a: Assumptions) -> float:
-    """A swap on the way in and another on the way out."""
-    return 2 * a.swap_rate * size_usd if needs_swap(pool) else 0.0
+    """A swap on the way in and another on the way out, of the share that has to change token."""
+    return 2 * a.swap_rate * size_usd * swapped_share(pool, a)
 
 
 def impermanent_loss_usd(pool: Pool, size_usd: float, days: int, a: Assumptions) -> float:

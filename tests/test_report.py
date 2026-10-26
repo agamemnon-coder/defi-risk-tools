@@ -137,7 +137,10 @@ def test_text_report_prints_assumptions_disclaimer_and_notes(build_scan, make_po
     assert "$1,000" in flat
     assert "30 days" in flat
     assert "50% of the reward APY is assumed lost" in flat
-    assert "0.30% each way" in flat
+    assert "none for a single-asset pool: you are assumed to hold its asset" in flat
+    assert "swaps 50% of the position on the way in and back on the way out" in flat
+    assert "at 0.30% (swap fee + slippage)" in flat
+    assert "unknown exposure" in flat
     assert "volatility^2 x T/365 / 8 of the position" in flat
     assert "Capped at 50% of the position" in flat
     assert "Cost of one transaction" in flat
@@ -184,6 +187,7 @@ def test_json_document_holds_assumptions_costs_counts_and_pools(build_scan, make
         "days": 30,
         "haircut": 0.5,
         "swap_rate": 0.003,
+        "multi_asset_swap_share": 0.5,
         "enter_txs": 2,
         "exit_txs": 1,
         "claim_every_days": 30,
@@ -366,6 +370,9 @@ def test_html_labels_an_estimated_il_as_an_estimate(mixed_il_scan):
 
 def test_the_limitations_say_what_the_estimate_is_and_is_not():
     text = " ".join(report.LIMITATIONS)
+
+    assert "a single-asset pool is assumed to need no swap" in text
+    assert "if you must buy it first, that swap is not counted" in text
 
     assert "estimated, not measured" in text
     assert "50/50 constant-product pool" in text

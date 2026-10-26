@@ -44,7 +44,9 @@ LIMITATIONS = (
     "Prices are only looked up for the pools shown (after the filters and the limit), so a pool "
     "that loses money only once impermanent loss is counted can be missing from a short list. "
     "A larger limit widens it.",
-    "Gas and L1 data fees are rough estimates. Swap cost is a flat rate, not a price-impact model.",
+    "Gas and L1 data fees are rough estimates. Swap cost is a flat rate, not a price-impact model, "
+    "and a single-asset pool is assumed to need no swap because you already hold its asset: if "
+    "you must buy it first, that swap is not counted.",
     "The reward haircut is a rule of thumb, not a forecast of any token's price.",
     "Smart contract risk, depegs, taxes, bridge costs and withdrawal limits are not modelled.",
 )
@@ -130,8 +132,9 @@ def assumption_rows(scan: Scan) -> list[tuple[str, str]]:
         ),
         (
             "Swaps",
-            f"{a.swap_rate:.2%} each way (swap fee + slippage); none for single-asset "
-            "stablecoin pools",
+            "none for a single-asset pool: you are assumed to hold its asset. A multi-asset pool "
+            f"(or one of unknown exposure) swaps {a.multi_asset_swap_share:.0%} of the position "
+            f"on the way in and back on the way out, at {a.swap_rate:.2%} (swap fee + slippage)",
         ),
         (
             "Impermanent loss",

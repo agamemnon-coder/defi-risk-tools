@@ -50,15 +50,15 @@ def test_volatile_lp_with_a_known_il_figure(make_pool):
 
     assert result.gross_usd == pytest.approx(28.0)  # $1,000 * 36.5% * 28/365
     assert result.gas_usd == pytest.approx(0.30)
-    assert result.swap_usd == pytest.approx(6.0)  # 2 * 0.3% * $1,000
+    assert result.swap_usd == pytest.approx(3.0)  # 2 * 0.3% * $1,000 * 0.5
     assert result.il_usd == pytest.approx(20.0)  # $1,000 * 0.5% * 28/7
-    assert result.costs_usd == pytest.approx(26.30)
-    assert result.net_usd == pytest.approx(1.70)
-    assert result.net_apy == pytest.approx(1.70 / 1000 * 365 / 28 * 100)
-    # per-dollar margin: 0.028 - 0.006 - 0.020 = 0.002, so gas 0.30 / 0.002
-    assert result.break_even_size_usd == pytest.approx(150.0)
-    # net(T) = T - 5T/7 - 6.30 turns positive between T = 22 (-0.014) and T = 23 (+0.271)
-    assert result.break_even_days == 23
+    assert result.costs_usd == pytest.approx(23.30)
+    assert result.net_usd == pytest.approx(4.70)
+    assert result.net_apy == pytest.approx(4.70 / 1000 * 365 / 28 * 100)
+    # per-dollar margin: 0.028 - 0.003 - 0.020 = 0.005, so gas 0.30 / 0.005
+    assert result.break_even_size_usd == pytest.approx(60.0)
+    # net(T) = T - 5T/7 - 3.30 turns positive between T = 11 (-0.157) and T = 12 (+0.129)
+    assert result.break_even_days == 12
     assert result.flags == (model.IL_RISK,)
 
 
@@ -100,13 +100,15 @@ def test_no_claims_when_the_pool_pays_no_rewards(make_pool):
 @pytest.mark.parametrize(
     ("stablecoin", "exposure", "swap_usd"),
     [
-        (True, "single", 0.0),  # the only case that needs no swap
-        (True, "multi", 6.0),
-        (False, "single", 6.0),
-        (False, "multi", 6.0),
+        (True, "single", 0.0),  # you hold the asset, whichever asset it is
+        (False, "single", 0.0),
+        (True, "multi", 3.0),  # 2 * 0.3% * $1,000 * 0.5
+        (False, "multi", 3.0),
+        (False, "something new", 3.0),  # an exposure that is not known counts as multi-asset
+        (True, "", 3.0),
     ],
 )
-def test_only_single_asset_stablecoin_pools_skip_the_swap(
+def test_only_a_single_asset_pool_skips_the_swap_and_a_multi_asset_pool_swaps_half(
     make_pool, stablecoin, exposure, swap_usd
 ):
     pool = make_pool(stablecoin=stablecoin, exposure=exposure)
@@ -115,9 +117,33 @@ def test_only_single_asset_stablecoin_pools_skip_the_swap(
 
 
 def test_swap_cost_scales_with_the_position_and_the_rate(make_pool):
-    pool = make_pool(stablecoin=False)
+    pool = make_pool(exposure="multi")
 
-    assert model.swap_cost_usd(pool, 50_000.0, Assumptions(swap_rate=0.001)) == pytest.approx(100.0)
+    # 2 swaps * 0.1% * $50,000 * the half that changes token
+    assert model.swap_cost_usd(pool, 50_000.0, Assumptions(swap_rate=0.001)) == pytest.approx(50.0)
+
+
+def test_the_share_swapped_in_a_multi_asset_pool_can_be_changed(make_pool):
+    multi = make_pool(exposure="multi")
+    single = make_pool(exposure="single")
+
+    everything = Assumptions(multi_asset_swap_share=1.0)
+    nothing = Assumptions(multi_asset_swap_share=0.0)
+
+    assert model.swap_cost_usd(multi, 1000.0, everything) == pytest.approx(6.0)
+    assert model.swap_cost_usd(multi, 1000.0, nothing) == 0.0
+    assert model.swap_cost_usd(single, 1000.0, everything) == 0.0  # a single asset is never swapped
+
+
+def test_a_single_asset_pool_that_is_not_a_stablecoin_pays_no_swap_either(make_pool):
+    # Lending WETH on Aave: the user holds WETH, so there is nothing to swap.
+    weth = make_pool(stablecoin=False, exposure="single", apy_base=2.0)
+
+    result = evaluate_pool(weth, Assumptions(), TX)
+
+    assert result.swap_usd == 0
+    assert result.gross_usd == pytest.approx(1000 * 0.02 * 30 / 365)  # $1.64 of yield
+    assert not result.cost_negative  # against $0.30 of gas
 
 
 def test_impermanent_loss_is_capped_at_half_the_position(make_pool):
@@ -170,15 +196,15 @@ def test_position_size_and_holding_period_flow_through(make_pool):
 
 
 def test_no_margin_means_no_break_even_size_but_a_longer_hold_still_pays(make_pool):
-    # 3% for 30 days is 0.25% of the position, less than the 0.6% the two swaps cost.
-    pool = make_pool(stablecoin=False, exposure="single", apy_base=3.0)
+    # 3% for 30 days is 0.25% of the position, less than the 0.3% the two half-position swaps cost.
+    pool = make_pool(exposure="multi", apy_base=3.0)
 
     result = evaluate_pool(pool, Assumptions(), TX)
 
     assert result.break_even_size_usd is None
     assert model.COST_NEGATIVE in result.flags
-    # $1,000 * 3% * T/365 >= $6.00 + $0.30: T = 76 pays 6.2466, T = 77 pays 6.3288
-    assert result.break_even_days == 77
+    # $1,000 * 3% * T/365 >= $3.00 + $0.30: T = 40 pays 3.2877, T = 41 pays 3.3699
+    assert result.break_even_days == 41
 
 
 def test_zero_gas_means_every_size_breaks_even(make_pool):
@@ -213,11 +239,12 @@ def test_a_pool_that_pays_nothing_never_breaks_even(make_pool):
 
 
 def test_break_even_days_search_covers_a_year_or_the_holding_period_if_longer(make_pool):
-    # 0.5% APY on a volatile pool: $1,000 * 0.5% * T/365 >= $6.30 first holds at T = 460
-    pool = make_pool(stablecoin=False, exposure="multi", apy_base=0.5)
+    # 0.3% APY on a multi-asset pool: $1,000 * 0.3% * T/365 >= $3.30 first holds at T = 402
+    # (T = 401 pays 3.2959, T = 402 pays 3.3041)
+    pool = make_pool(exposure="multi", apy_base=0.3)
 
     assert evaluate_pool(pool, Assumptions(days=30), TX).break_even_days is None
-    assert evaluate_pool(pool, Assumptions(days=500), TX).break_even_days == 460
+    assert evaluate_pool(pool, Assumptions(days=500), TX).break_even_days == 402
 
 
 def test_break_even_size_agrees_with_the_sign_of_net_on_every_sample_pool(sample_payload):
@@ -303,16 +330,21 @@ def test_flags_come_in_a_fixed_order(make_pool):
 
 
 def test_cost_negative_pools_lead_and_the_highest_advertised_apy_comes_first(make_pool):
-    # Each of these loses money: a stablecoin pool pays $0.30 in gas and a volatile one adds $6.
-    bad = {"stablecoin": False}
-    advertises_most = evaluate_pool(make_pool(pool_id="a", apy_base=6.0, **bad), Assumptions(), TX)
-    advertises_less = evaluate_pool(make_pool(pool_id="b", apy_base=2.0, **bad), Assumptions(), TX)
+    # Each of these loses money: a single-asset pool pays $0.30 in gas and a multi-asset one adds a
+    # $3.00 swap, which 3.5% for 30 days ($2.88) and 2% ($1.64) do not cover.
+    multi = {"exposure": "multi"}
+    advertises_most = evaluate_pool(
+        make_pool(pool_id="a", apy_base=3.5, **multi), Assumptions(), TX
+    )
+    advertises_less = evaluate_pool(
+        make_pool(pool_id="b", apy_base=2.0, **multi), Assumptions(), TX
+    )
     advertises_none = evaluate_pool(make_pool(pool_id="c", apy_base=0.0), Assumptions(), TX)
 
     ranked = model.rank([advertises_none, advertises_less, advertises_most])
 
     assert all(r.cost_negative for r in ranked)
-    assert [r.pool.pool_id for r in ranked] == ["a", "b", "c"]  # advertised APY: 6%, 2%, 0%
+    assert [r.pool.pool_id for r in ranked] == ["a", "b", "c"]  # advertised APY: 3.5%, 2%, 0%
     # It is not the order of net APY: "c" loses the least (only gas, no swap) and still comes last.
     assert ranked[2].net_apy > ranked[1].net_apy
 
@@ -330,7 +362,7 @@ def test_the_other_pools_follow_by_net_apy_highest_first(make_pool):
 
 def test_cost_negative_pools_come_before_better_looking_ones_that_do_not_lose(make_pool):
     loses = evaluate_pool(
-        make_pool(pool_id="loses", apy_base=1.0, stablecoin=False), Assumptions(), TX
+        make_pool(pool_id="loses", apy_base=1.0, exposure="multi"), Assumptions(), TX
     )
     wins = evaluate_pool(make_pool(pool_id="wins", apy_base=50.0), Assumptions(), TX)
 
@@ -505,24 +537,25 @@ def test_estimated_il_flows_through_the_whole_evaluation(make_pool):
 
     assert result.gross_usd == pytest.approx(100.0)  # $1,000 * 50% * 0.2
     assert result.gas_usd == pytest.approx(0.30)
-    assert result.swap_usd == pytest.approx(6.0)
+    assert result.swap_usd == pytest.approx(3.0)
     assert result.il_usd == pytest.approx(16.0)
-    assert result.net_usd == pytest.approx(77.7)
+    assert result.net_usd == pytest.approx(80.7)
     assert result.flags == (model.IL_RISK, model.IL_ESTIMATED)
-    # per dollar: 0.5 * 0.2 - 0.006 - 0.016 = 0.078, so gas 0.30 / 0.078
-    assert result.break_even_size_usd == pytest.approx(0.30 / 0.078)
-    # net(T) = T * (1000 * 0.5 - 1000 * 0.64 / 8) / 365 - 6.30 = 1.150685 T - 6.30:
-    # -0.547 at T = 5 and +0.604 at T = 6
-    assert result.break_even_days == 6
+    # per dollar: 0.5 * 0.2 - 0.003 - 0.016 = 0.081, so gas 0.30 / 0.081
+    assert result.break_even_size_usd == pytest.approx(0.30 / 0.081)
+    # net(T) = T * (1000 * 0.5 - 1000 * 0.64 / 8) / 365 - 3.30 = 1.150685 T - 3.30:
+    # -0.998 at T = 2 and +0.152 at T = 3
+    assert result.break_even_days == 3
 
 
 def test_estimated_il_can_turn_a_pool_cost_negative(make_pool):
-    # 8% for 30 days pays $6.58 against $6.30 of gas and swaps: +$0.28 before impermanent loss.
-    pool = make_pool(stablecoin=False, exposure="multi", apy_base=8.0, il_risk=True)
+    # 4.5% for 30 days pays $3.70 against $3.30 of gas and swaps: +$0.40 before impermanent loss.
+    pool = make_pool(exposure="multi", apy_base=4.5, il_risk=True)
 
     before = evaluate_pool(pool, Assumptions(), TX)
     after = evaluate_pool(dataclasses.replace(pool, il_volatility=0.4), Assumptions(), TX)
 
+    assert before.net_usd == pytest.approx(1000 * 0.045 * 30 / 365 - 3.30)  # +0.3986
     assert not before.cost_negative
     assert model.IL_UNKNOWN in before.flags
     assert after.il_usd == pytest.approx(1000 * 0.4**2 * (30 / 365) / 8)  # $1.64
@@ -602,7 +635,14 @@ def test_a_pool_under_the_tvl_floor_is_counted_once_not_as_zero_apy(make_pool):
 
 @pytest.mark.parametrize(
     "bad",
-    [{"size_usd": 0}, {"days": 0}, {"haircut": -0.1}, {"haircut": 1.1}],
+    [
+        {"size_usd": 0},
+        {"days": 0},
+        {"haircut": -0.1},
+        {"haircut": 1.1},
+        {"multi_asset_swap_share": -0.1},
+        {"multi_asset_swap_share": 1.1},
+    ],
 )
 def test_assumptions_reject_nonsense(bad):
     with pytest.raises(ValueError):
