@@ -40,13 +40,14 @@ def raw_pool(**overrides) -> dict:
 def test_the_sample_response_parses_completely(sample_payload):
     parsed = parse_pools(sample_payload)
 
-    assert len(parsed.pools) == 61
+    assert len(parsed.pools) == 76
     assert parsed.skipped == 0
-    assert {pool.chain for pool in parsed.pools} == {"Arbitrum", "OP Mainnet", "Base", "Solana"}
+    chains = {pool.chain for pool in parsed.pools}
+    assert chains == {"Ethereum", "Arbitrum", "OP Mainnet", "Base", "Solana"}
 
 
 def test_load_pools_file_reads_the_sample(fixture_path):
-    assert len(data.load_pools_file(fixture_path).pools) == 61
+    assert len(data.load_pools_file(fixture_path).pools) == 76
 
 
 def test_a_sample_pool_is_read_field_by_field(sample_payload):
@@ -254,7 +255,7 @@ def test_fetch_pools_reads_the_api_response(http_mock, sample_payload):
     with data.make_client() as client:
         parsed = data.fetch_pools(client)
 
-    assert len(parsed.pools) == 61
+    assert len(parsed.pools) == 76
 
 
 def test_a_failed_request_is_tried_once_more(http_mock):

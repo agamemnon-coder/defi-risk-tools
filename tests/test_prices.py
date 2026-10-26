@@ -10,6 +10,10 @@ from defi_risk_tools.data import DataError, make_client, parse_pools
 WETH = "arbitrum:0x82af49447d8a07e3bd95bd0d56f35241523fbab1"
 USDC = "arbitrum:0xaf88d065e77c8cc2239327c5edb3a432268e5831"
 WBTC = "arbitrum:0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f"
+ETH_WETH = "ethereum:0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+ETH_USDC = "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+ETH_WBTC = "ethereum:0x2260fac5e5542a773aa44fbcfedf7c193bc2c599"
+ETH_USDT = "ethereum:0xdac17f958d2ee523a2206206994597c13d831ec7"
 
 
 @pytest.fixture
@@ -29,6 +33,7 @@ def serve_chart(chart_server):
     ("overrides", "expected"),
     [
         ({}, ("arbitrum:0xaaa", "arbitrum:0xbbb")),
+        ({"chain": "Ethereum"}, ("ethereum:0xaaa", "ethereum:0xbbb")),
         ({"chain": "OP Mainnet"}, ("optimism:0xaaa", "optimism:0xbbb")),
         ({"chain": "Base"}, ("base:0xaaa", "base:0xbbb")),
         ({"underlying_tokens": ("0xAAA", "0xBbB")}, ("arbitrum:0xaaa", "arbitrum:0xbbb")),
@@ -38,7 +43,7 @@ def serve_chart(chart_server):
         ({"underlying_tokens": ("0xaaa", "0xbbb", "0xccc")}, None),
         ({"underlying_tokens": ()}, None),
         ({"underlying_tokens": ("0xaaa", "0xAAA")}, None),  # the same token twice
-        ({"chain": "Ethereum"}, None),  # no coin prefix known
+        ({"chain": "Polygon"}, None),  # no coin prefix known
     ],
 )
 def test_only_pools_with_il_risk_and_exactly_two_tokens_can_be_estimated(
@@ -68,10 +73,10 @@ def test_the_same_evm_token_in_two_cases_is_one_coin():
 def test_the_real_chart_response_is_read(prices_payload):
     series = prices.parse_chart(prices_payload)
 
-    assert len(series) == 9
+    assert len(series) == 13  # nine on the L2s, four on Ethereum
     assert all(len(points) == 30 for points in series.values())
     assert all(points == sorted(points) for points in series.values())
-    assert set(series) >= {WETH, USDC, WBTC}
+    assert set(series) >= {WETH, USDC, WBTC, ETH_WETH, ETH_USDC, ETH_WBTC, ETH_USDT}
     assert all(key == prices.normalise_key(key) for key in series)
     weth = series[WETH]
     assert 1_000 < weth[0][1] < 10_000  # a plausible price of ETH in dollars
@@ -79,7 +84,7 @@ def test_the_real_chart_response_is_read(prices_payload):
 
 
 def test_a_saved_chart_response_can_be_loaded_from_a_file(prices_path):
-    assert len(prices.load_series(prices_path)) == 9
+    assert len(prices.load_series(prices_path)) == 13
 
 
 @pytest.mark.parametrize("content", ["{not json", '{"coins": []}', "[]", '{"price": 1}'])
@@ -461,6 +466,9 @@ def test_volatilities_of_the_real_sample_match_a_hand_computed_reference(
         ("Base", "uniswap-v3", "WETH-CBBTC", 0): 0.210607,  # WETH / cbBTC
         ("Base", "uniswap-v3", "WETH-CBBTC", 1): 0.210607,
         ("Base", "uniswap-v3", "USDC-CBBTC", 0): 0.267180,
+        ("Ethereum", "uniswap-v3", "USDC-WETH", 0): 0.412939,  # USDC / WETH
+        ("Ethereum", "uniswap-v3", "WETH-USDT", 0): 0.412303,
+        ("Ethereum", "uniswap-v3", "WBTC-WETH", 0): 0.218020,  # WBTC / WETH
     }
     assert len(volatilities) == len(expected)
     for (chain, project, symbol, index), want in expected.items():
@@ -468,11 +476,38 @@ def test_volatilities_of_the_real_sample_match_a_hand_computed_reference(
         assert volatilities[pool.pool_id] == pytest.approx(want, abs=5e-7), (chain, symbol)
     # Pools whose tokens are not in the saved prices stay unestimated, and the notes say how many.
     estimable = [p for p in pools if prices.coin_keys(p)]
-    assert len(estimable) == 24
+    assert len(estimable) == 29  # 24 on the L2s and Solana, and five on Ethereum
     assert notes == [
-        "Impermanent loss is estimated for 10 of the 24 pools with IL risk and two tokens. The "
-        "other 14 stay IL_UNKNOWN: no usable daily prices for one or both of their two tokens."
+        "Impermanent loss is estimated for 13 of the 29 pools with IL risk and two tokens. The "
+        "other 16 stay IL_UNKNOWN: no usable daily prices for one or both of their two tokens."
     ]
+
+
+def test_the_ethereum_pools_of_the_sample_are_priced_by_their_lowercase_ethereum_keys(
+    sample_payload,
+):
+    pools = [p for p in parse_pools(sample_payload).pools if p.chain == "Ethereum"]
+    asked = []
+
+    def lookup(keys):
+        asked.append(keys)
+        return {}, []
+
+    prices.estimate_volatilities(pools, lookup)
+
+    # Of the 15 pools on Ethereum, five have IL risk and exactly two tokens: Uniswap v3 USDC-WETH,
+    # WETH-USDT and WBTC-WETH, Uniswap v2 PEPE-WETH and Balancer v2 BAL-WETH. The pool with three
+    # tokens, and the ones without IL risk, are not asked about.
+    assert len(asked) == 1
+    assert set(asked[0]) == {
+        ETH_WETH,
+        ETH_USDC,
+        ETH_WBTC,
+        ETH_USDT,
+        "ethereum:0x6982508145454ce325ddbe47a25d4ec3d2311933",  # PEPE
+        "ethereum:0xba100000625a3754423978a60c9317c58a424e3d",  # BAL
+    }
+    assert len(asked[0]) == 6  # each coin once, though WETH is in all five pools
 
 
 def test_the_il_estimate_for_the_real_eth_usdc_pool_is_a_few_dollars_at_most(

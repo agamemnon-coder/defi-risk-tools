@@ -89,7 +89,7 @@ For each pool:
   - `report.py`
   - `cli.py`
 - **Tests:** pytest, offline only, using `tests/fixtures/pools_sample.json` (61 real pools from
-  2026-10-26).
+  2026-10-26, and 76 since the Ethereum pools of v1.4).
   - The model math is checked with hand-computed numbers, including a stablecoin single pool and a
     volatile LP.
   - Break-even edge cases: no margin, and zero gas.
@@ -200,3 +200,61 @@ For each pool:
    where the small-move IL formula is least reliable. So in each group (cost-negative, then the
    rest) the pools flagged `APY_OUTLIER` now come after the others, in the same order among
    themselves. They are still counted and still shown.
+
+## v1.4 changes
+
+Ethereum mainnet is the fifth chain, and the first in the list. The DeFiLlama chain name is
+`Ethereum`.
+
+1. **Cost table.** `Ethereum` is an EVM chain that pays fees in ETH (priced with
+   `coingecko:ethereum`, which is already fetched) and reads one `eth_gasPrice` from a public RPC.
+   - **RPC:** `https://ethereum-rpc.publicnode.com`, which needs no key. Three candidates were
+     called three times each on 2026-10-26: publicnode answered every time (0.087 gwei, in 50 to
+     350 ms); `https://eth.llamarpc.com` answered HTTP 525 (an SSL handshake error from the CDN in
+     front of it) every time; `https://cloudflare-eth.com` answered every time with the JSON-RPC
+     error -32046, "Cannot fulfill request". If the call fails, the default applies, as on every
+     chain, and the report says so.
+   - **Gas units:** 200,000 per transaction. It is an estimate of the average of an approve, a
+     deposit, a withdrawal and a claim on mainnet, and a round figure: it varies a lot with the
+     protocol. The L2s keep 250,000.
+   - **L1 data fee:** none. Mainnet is the L1. `TxCost.describe()` leaves the L1 part out when the
+     fee is 0.
+   - **Default gas price:** 0.09 gwei, the reading of 2026-10-26 (0.087 gwei, and 0.18 gwei later
+     that day) rounded. At ETH $2,300 one transaction costs 200,000 gas × 0.09 gwei × $2,300 =
+     $0.0414. The default is used offline and when the RPC call fails. Unlike the L2s' it is only
+     good for the day it was read: mainnet gas moves by large factors.
+2. **Impermanent loss.** `COIN_PREFIXES["Ethereum"] = "ethereum"`, so the tokens of an Ethereum pool
+   are looked up as `ethereum:<address>` (lowercase, like the other EVM chains), and Ethereum pools
+   with IL risk and two tokens are estimated like the others.
+3. **Default chains.** `DEFAULT_CHAINS` is the order of the cost table, with Ethereum first, so it
+   leads the list of chains, the by-chain table and the costs of one transaction. The pages
+   workflow keeps its command, `report --out site/index.html --limit 100`.
+4. **Fixture.** 15 real Ethereum pools of 2026-10-26 are appended to the 61 of the other chains
+   (76 in all), unchanged, picked in the same way: large single-asset lending and staking pools
+   (Lido, Aave, Sky, Ethena, Morpho with rewards, a pool that pays only rewards), Uniswap v3
+   pairs with prices, low-APY multi-asset pools that lose money (Curve, Fluid, Balancer), an
+   outlier APY (Uniswap v2 PEPE-WETH) and a pool of three tokens. The prices file gets 30 daily
+   prices of WETH, USDC, WBTC and USDT on Ethereum, from a second chart request, merged into the
+   first; the nine coins that were there are unchanged.
+5. **What a fifth chain costs a live run.** Ethereum has more pools than the four other chains
+   together: 4,102 pools were analysed on 2026-10-26, 2,159 of them on Ethereum. The workflow
+   command made 146 chart requests for 1,456 tokens (83 requests and 828 tokens with four chains),
+   all answered, and took 42 seconds (10 seconds with four chains); the model itself takes 2
+   seconds of that. Ethereum alone added 63 requests. The give-up rule of v1.3 bounds a failing
+   price service at five requests in a row.
+6. **Mainnet gas moves the daily page.** The counts of the live run of 2026-10-26, replayed with
+   only the answer of the Ethereum RPC changed (everything else as it was received):
+
+   | Mainnet gas | One transaction | Ethereum pools cost-negative | All five chains |
+   | --- | --- | --- | --- |
+   | 0.087 gwei | $0.040 | 1,067 of 2,159 (49.4%) | 2,052 of 4,102 |
+   | 0.18 gwei (the run) | $0.083 | 1,084 (50.2%) | 2,069 |
+   | 0.5 gwei | $0.231 | 1,140 (52.8%) | 2,125 |
+   | 2 gwei | $0.925 | 1,468 (68.0%) | 2,453 |
+   | 5 gwei | $2.313 | 1,877 (86.9%) | 2,862 |
+   | 10 gwei | $4.627 | 2,049 (94.9%) | 3,034 |
+   | 30 gwei | $13.88 | 2,127 (98.5%) | 3,112 |
+
+   So the headline of the page depends on the gas price of the hour it was built. At today's
+   levels, mainnet costs about what an L2 does, and the Ethereum pools that lose money do so to
+   the swaps of multi-asset pools.
