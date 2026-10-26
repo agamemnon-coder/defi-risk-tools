@@ -19,6 +19,9 @@ COINGECKO_IDS = {"ETH": "coingecko:ethereum", "SOL": "coingecko:solana"}
 DEFAULT_NATIVE_PRICES_USD = {"ETH": 2_300.0, "SOL": 100.0}
 
 GAS_UNITS_PER_TX = 250_000  # one approve, deposit, withdraw or claim, on an L2
+# One transaction on Ethereum mainnet, in gas units. An estimate: the average of an approve, a
+# deposit, a withdrawal and a claim. It varies a lot with the protocol, so it is a round figure.
+MAINNET_GAS_UNITS_PER_TX = 200_000
 L1_DATA_FEE_USD = 0.02  # estimate of what an L2 pays to post one transaction's data to Ethereum
 ETH_PER_GWEI = 1e-9
 
@@ -36,6 +39,16 @@ class ChainCosts:
 
 
 COST_TABLE: dict[str, ChainCosts] = {
+    # Mainnet is the L1: it has no L1 data fee. The default gas price is the reading of
+    # `eth_gasPrice` on 2026-10-26 (0.087 gwei), rounded. Mainnet gas moves by large factors in a
+    # day, so unlike the L2s' this default is only good for the day it was read.
+    "Ethereum": ChainCosts(
+        native_symbol="ETH",
+        rpc_url="https://ethereum-rpc.publicnode.com",
+        default_gas_price_gwei=0.09,
+        gas_units=MAINNET_GAS_UNITS_PER_TX,
+        l1_fee_usd=0.0,
+    ),
     "Arbitrum": ChainCosts(
         native_symbol="ETH",
         rpc_url="https://arb1.arbitrum.io/rpc",
@@ -60,7 +73,9 @@ COST_TABLE: dict[str, ChainCosts] = {
 }
 
 
-DEFAULT_CHAINS = tuple(COST_TABLE)  # the chains v1 scans: Arbitrum, OP Mainnet, Base, Solana
+# The chains that are scanned unless `--chain` says otherwise, in the order of the table: Ethereum,
+# Arbitrum, OP Mainnet, Base and Solana.
+DEFAULT_CHAINS = tuple(COST_TABLE)
 
 
 @dataclass(frozen=True)
@@ -88,10 +103,10 @@ class TxCost:
             fee = f"{self.spec.fixed_fee_native:.5f} {symbol} fixed fee"
             return f"${self.usd:.4f} per tx = {fee} x {price}"
         gas_price = f"{self.gas_price_gwei:.4f} gwei ({_source(self.gas_price_live)})"
-        return (
-            f"${self.usd:.4f} per tx = {self.spec.gas_units:,} gas x {gas_price} x {price}"
-            f" + ${self.spec.l1_fee_usd:.2f} L1 data fee (estimate)"
-        )
+        text = f"${self.usd:.4f} per tx = {self.spec.gas_units:,} gas x {gas_price} x {price}"
+        if self.spec.l1_fee_usd:  # an L2 also pays for its data on Ethereum; mainnet does not
+            text += f" + ${self.spec.l1_fee_usd:.2f} L1 data fee (estimate)"
+        return text
 
 
 def _source(live: bool) -> str:

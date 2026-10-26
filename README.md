@@ -34,7 +34,7 @@ still lose money. A pool is `COST_NEGATIVE` when the costs are larger than what 
 point is user protection: to make these costs visible before someone deposits, not to rank the
 best yields.
 
-It is free and open source (MIT). Version 1 covers Arbitrum, OP Mainnet, Base and Solana.
+It is free and open source (MIT). It covers Ethereum, Arbitrum, OP Mainnet, Base and Solana.
 
 ## Example
 
@@ -46,31 +46,32 @@ $ uv run yield-scan scan --from-file tests/fixtures/pools_sample.json \
 ```text
 Cost-Negative Yield Scanner  -  estimates only, not financial advice
 
-chain       project       symbol              TVL  APY (base+reward)  costs  net APY  break-even size  flags
-----------  ------------  --------------  -------  -----------------  -----  -------  ---------------  -------------------------------------------------
-Arbitrum    morpho-blue   KPK-EURE-YIELD    $1.6M          0.13+2.87  $3.13    -2.2%            never  COST_NEGATIVE,REWARD_DEPENDENT,IL_RISK,IL_UNKNOWN
-Arbitrum    gmx-evm       WBTC.B-USDC      $56.9M          2.54+0.00  $3.79    -2.1%            never  COST_NEGATIVE,IL_RISK,IL_ESTIMATED
-OP Mainnet  uniswap-v3    USDC-ZCHF         $1.5M          1.28+0.00  $3.06    -2.4%            never  COST_NEGATIVE
-Base        aerodrome-v1  VVV-DIEM          $9.0M          0.00+0.80  $3.09    -3.4%            never  COST_NEGATIVE,REWARD_DEPENDENT,IL_RISK,IL_UNKNOWN
-Base        uniswap-v3    JITOSOL-CBBTC    $14.0M          0.14+0.00  $3.07    -3.6%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
-Solana      raydium-amm   XDC-USDC         $34.9M          0.04+0.00  $3.02    -3.6%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
-OP Mainnet  uniswap-v4    USDC-FNX        $645.3k          0.04+0.00  $3.06    -3.7%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
-Solana      raydium-amm   USDC-AKE         $37.9M          0.03+0.00  $3.02    -3.6%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
-Solana      raydium-amm   USDC-PHA         $71.0M          0.02+0.00  $3.02    -3.6%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
-Solana      raydium-amm   PEARL-USDC       $38.5M          0.02+0.00  $3.02    -3.6%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
+chain       project       symbol             TVL  APY (base+reward)  costs  net APY  break-even size  flags
+----------  ------------  --------------  ------  -----------------  -----  -------  ---------------  -------------------------------------------------
+Arbitrum    morpho-blue   KPK-EURE-YIELD   $1.6M          0.13+2.87  $3.13    -2.2%            never  COST_NEGATIVE,REWARD_DEPENDENT,IL_RISK,IL_UNKNOWN
+Arbitrum    gmx-evm       WBTC.B-USDC     $56.9M          2.54+0.00  $3.79    -2.1%            never  COST_NEGATIVE,IL_RISK,IL_ESTIMATED
+OP Mainnet  uniswap-v3    USDC-ZCHF        $1.5M          1.28+0.00  $3.06    -2.4%            never  COST_NEGATIVE
+Ethereum    curve-dex     ETH-STETH       $89.4M          1.22+0.00  $3.12    -2.6%            never  COST_NEGATIVE
+Ethereum    curve-dex     USDT-WBTC-WETH  $10.9M          0.95+0.00  $3.17    -2.9%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
+Base        aerodrome-v1  VVV-DIEM         $9.0M          0.00+0.80  $3.09    -3.4%            never  COST_NEGATIVE,REWARD_DEPENDENT,IL_RISK,IL_UNKNOWN
+Ethereum    balancer-v2   BAL-WETH         $4.5M          0.75+0.00  $3.12    -3.0%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
+Ethereum    uniswap-v3    WBTC-WETH       $38.6M          0.49+0.00  $3.61    -3.9%            never  COST_NEGATIVE,IL_RISK,IL_ESTIMATED
+Base        uniswap-v3    JITOSOL-CBBTC   $14.0M          0.14+0.00  $3.07    -3.6%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
+Ethereum    fluid-dex     WSTETH-ETH      $81.9M          0.11+0.00  $3.12    -3.7%            never  COST_NEGATIVE
 
-Pools analysed: 53 on Arbitrum, OP Mainnet, Base, Solana. Cost-negative: 12. Shown: 10.
+Pools analysed: 68 on Ethereum, Arbitrum, OP Mainnet, Base, Solana. Cost-negative: 18. Shown: 10.
 Left out: 0 under the TVL floor, 8 advertising an APY of 0 or less, 0 unreadable entries in the source.
-Impermanent loss: estimated from token prices for 9 of the 24 analysed pools with IL risk.
+Impermanent loss: estimated from token prices for 12 of the 30 analysed pools with IL risk.
 
 By chain
 chain       analysed  cost-negative  share  IL estimated
 ----------  --------  -------------  -----  ------------
+Ethereum          15              6  40.0%        3 of 6
 Arbitrum          12              2  16.7%        4 of 6
 OP Mainnet        11              2  18.2%        1 of 4
 Base              15              2  13.3%        4 of 8
 Solana            15              6  40.0%        0 of 6
-all chains        53             12  22.6%       9 of 24
+all chains        68             18  26.5%      12 of 30
 
 Source: file tests/fixtures/pools_sample.json
 Prices: file tests/fixtures/prices_sample.json
@@ -81,31 +82,39 @@ The real output goes on to print the assumptions, the cost of one transaction on
 notes (for example that a gas price fell back to its default) and the disclaimer. That is the
 rule of the tool: every report states the assumptions it was computed with.
 
-The fixture is a real DeFiLlama response saved on 2026-10-26 (61 pools). `--prices-file` is a real
-chart response from the same day with 30 daily prices of WETH, USDC, WBTC and cbBTC. Both
-options make the run offline: no network calls, so you get the same output as above.
+The fixture is a real DeFiLlama response saved on 2026-10-26 (76 pools: 15 or 16 on each chain).
+`--prices-file` is two real chart responses from the same day, put together: 30 daily prices of
+WETH, USDC, WBTC and cbBTC on Arbitrum, OP Mainnet and Base, and of WETH, USDC, WBTC and USDT on
+Ethereum. Both options make the run offline: no network calls, so you get the same output as above.
 
 The first rows are the most misleading pools: they advertise a real APY and lose money anyway.
 KPK-EURE-YIELD on Arbitrum shows 3.00% a year, but 2.87 points of that are reward tokens (half of
 which are assumed lost), and as a multi-asset pool it swaps half of a $1,000 deposit on the way in
 and back on the way out, which costs $3.00. Held for 30 days, $1,000 ends $1.84 down. "Net APY"
-annualises the result: -2.2% a year. Pools that advertise no APY at all are left out (8 of the 61
+annualises the result: -2.2% a year. Pools that advertise no APY at all are left out (8 of the 76
 here), because they mislead nobody; `--include-zero-apy` brings them back. A single-asset pool,
-such as lending WETH on Aave, pays no swap, because you are assumed to hold the asset: only 12 of
-the 53 pools lose money.
+such as lending WETH on Aave, pays no swap, because you are assumed to hold the asset: only 18 of
+the 68 pools lose money.
 
-One row shows the impermanent loss estimate. GMX WBTC.B-USDC is flagged `IL_ESTIMATED`: over the
+Five of the ten rows are on Ethereum, which comes first in the list of chains. A mainnet
+transaction is estimated at 200,000 gas units, which at the default gas price of 0.09 gwei and ETH
+at $2,300 costs $0.0414. That is about what an L2 transaction costs, so these pools lose their
+money to the $3.00 of swaps and not to gas. Mainnet gas is not always that cheap: see the
+limitations.
+
+Two rows show the impermanent loss estimate. GMX WBTC.B-USDC is flagged `IL_ESTIMATED`: over the
 last 30 days the WBTC/USDC price ratio had a volatility of 26% a year, so $1,000 held for 30 days
 is expected to lose 1000 × 0.26² × 30/365 / 8 = $0.69 to impermanent loss, and the costs go from
-$3.09 to $3.79. The eight other pools shown with IL risk stay `IL_UNKNOWN`: one holds a single
-token, and seven have a token with no prices in the saved file.
+$3.09 to $3.79. The other is Uniswap v3 WBTC-WETH on Ethereum, with a volatility of 22% and $0.49
+of impermanent loss. The five other pools shown with IL risk stay `IL_UNKNOWN`: one holds a single
+token, one holds three, and three have a token with no prices in the saved file.
 
-The lines under the table count all 53 pools, not only the 10 shown: `--limit` cuts the table and
+The lines under the table count all 68 pools, not only the 10 shown: `--limit` cuts the table and
 nothing else. The impermanent loss of every pool whose tokens are in the saved prices is estimated
-first (9 of the 24 with IL risk), and only then is the list ranked and cut, so the counts and the
-order do not depend on the limit. The table by chain splits the totals: Solana has the largest
-share of cost-negative pools, 6 of its 15, and no estimate at all, because the saved prices are
-of tokens on the other chains.
+first (12 of the 30 with IL risk), and only then is the list ranked and cut, so the counts and the
+order do not depend on the limit. The table by chain splits the totals: Ethereum and Solana have
+the largest share of cost-negative pools, 6 of their 15 each, and Solana has no estimate at all,
+because the saved prices are of tokens on other chains.
 
 A sample report built from the same data is in [`docs/report.html`](docs/report.html).
 
@@ -115,15 +124,15 @@ You need [uv](https://docs.astral.sh/uv/) and Python 3.12. From a checkout of th
 
 ```console
 $ uv sync
-$ uv run yield-scan scan                       # live data, the four chains, $1,000 for 30 days
+$ uv run yield-scan scan                       # live data, the five chains, $1,000 for 30 days
 $ uv run yield-scan scan --size 250 --days 14  # a smaller, shorter position
 $ uv run yield-scan scan --only-negative --chain Base --limit 20
 $ uv run yield-scan scan --json                # the same data as JSON, for scripts
 $ uv run yield-scan report --out report.html   # one self-contained HTML page
 ```
 
-A live run looks up prices for every pool it analyses, so that the counts are exact: 828 tokens in
-83 requests when this was written. That took 10 seconds on a fast connection, and the tool says
+A live run looks up prices for every pool it analyses, so that the counts are exact: 1,456 tokens
+in 146 requests when this was written. That took 42 seconds on a fast connection, and the tool says
 what it is doing on stderr. A run with `--from-file` makes no requests at all.
 
 ### `yield-scan scan` and `yield-scan report`
@@ -132,7 +141,7 @@ what it is doing on stderr. A run with `--from-file` makes no requests at all.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--chain NAME` | Arbitrum, OP Mainnet, Base, Solana | A DeFiLlama chain name. Repeat it for several. Case does not matter. v1 has cost data for the four default chains only; any other name is rejected with a message that lists them. |
+| `--chain NAME` | Ethereum, Arbitrum, OP Mainnet, Base, Solana | A DeFiLlama chain name. Repeat it for several. Case does not matter. There is cost data for the five default chains only; any other name is rejected with a message that lists them. |
 | `--size USD` | 1000 | Position size, in dollars. |
 | `--days N` | 30 | Holding period, in whole days. |
 | `--haircut H` | 0.5 | Share of the reward APY assumed lost, from 0 to 1. |
@@ -165,7 +174,7 @@ $ uv run yield-scan scan --from-file pools.json
 
 `--prices-file` does the same for token prices: it is a saved response from
 `https://coins.llama.fi/chart/{coins}?span=30&period=1d`, where `{coins}` is a comma-separated list
-of `<prefix>:<address>` with the prefix `arbitrum`, `optimism`, `base` or `solana` (the addresses
+of `<prefix>:<address>` with the prefix `ethereum`, `arbitrum`, `optimism`, `base` or `solana` (the addresses
 of a pool are in the `underlying_tokens` of `scan --json`). With it, impermanent loss is estimated
 offline, for every pool whose tokens are in the file. Without it, an offline run does not estimate
 impermanent loss, and says so. Ask for ten coins or so at a time: when this was written, DeFiLlama
@@ -187,7 +196,8 @@ and one retry. It uses no API key and has no wallet.
 - `GET https://coins.llama.fi/prices/current/coingecko:ethereum,coingecko:solana`: the prices of ETH
   and SOL.
 - One read-only `eth_gasPrice` JSON-RPC call to each public RPC of the chains scanned:
-  `https://arb1.arbitrum.io/rpc`, `https://mainnet.optimism.io`, `https://mainnet.base.org`.
+  `https://ethereum-rpc.publicnode.com`, `https://arb1.arbitrum.io/rpc`,
+  `https://mainnet.optimism.io`, `https://mainnet.base.org`.
 - `GET https://coins.llama.fi/chart/{coins}?span=30&period=1d`: 30 daily prices of the tokens of
   every pool analysed that has IL risk and holds exactly two tokens, at most ten coins per
   request, each coin once. The coins of the pools that rank highest are asked for first.
@@ -224,7 +234,7 @@ publishes it at <https://agamemnon-coder.github.io/defi-risk-tools/>. It runs ev
 UTC, on every push to `main`, and on demand (Actions → Pages → Run workflow). It runs
 `yield-scan report --out site/index.html --limit 100`, so the page shows the 100 most misleading
 pools, with the default assumptions, but its summary and its table by chain count every pool
-analysed. The build looks up prices for all of them (83 requests when this was written). If the
+analysed. The build looks up prices for all of them (146 requests when this was written). If the
 pools cannot be fetched the build fails and the previous page stays up; if only the prices cannot
 be fetched, the page is built without those estimates and says so in its notes.
 
@@ -273,11 +283,13 @@ they live in `Assumptions` in `src/defi_risk_tools/model.py` and the cost table 
 | Yield | Simple, not compounded. The APY DeFiLlama shows is assumed to stay the same for the whole holding period. |
 | Base and reward split | `apyBase` is base yield and `apyReward` is reward yield. A null reward counts as 0. A null base counts as the part of `apy` that is not reward, so when both are null, `apy` counts as base. |
 | Transactions | 2 to enter (approve and deposit), 1 to exit, and 1 claim for every started 30 days while the reward APY is above 0 (so 3 or 4 transactions at 30 days, 5 at 31 to 60 days with rewards, and so on). |
-| Cost of one EVM transaction | `gas units × gas price × price of ETH + L1 data fee`. 250,000 gas units on every L2. The gas price is one `eth_gasPrice` call at run time. The L1 data fee is a flat $0.02 per transaction: a rough estimate, not a measurement. |
+| Cost of one EVM transaction | `gas units × gas price × price of ETH + L1 data fee`. The gas price is one `eth_gasPrice` call per chain at run time. On an L2 (Arbitrum, OP Mainnet, Base) a transaction is 250,000 gas units plus a flat $0.02 L1 data fee: both are rough estimates, not measurements. On Ethereum mainnet it is 200,000 gas units and no data fee, because mainnet is the L1. |
+| Gas units on Ethereum | 200,000 per transaction: an estimate of the average of an approve, a deposit, a withdrawal and a claim on mainnet. A plain approve takes about 50,000, and a deposit, a withdrawal or a claim anywhere from under 100,000 to over 300,000, depending on the protocol. |
+| Gas price on Ethereum | One `eth_gasPrice` reading per run, from `https://ethereum-rpc.publicnode.com`, a free endpoint that needs no key. When that call fails, and in offline runs, 0.09 gwei is used: the reading of 2026-10-26 (0.087 gwei) rounded, which is about $0.04 a transaction. Mainnet gas moves by large factors in a day, so this default is only good for the day it was read. |
 | Cost of one Solana transaction | A fixed 0.00005 SOL (ten times the 5,000 lamport base fee, to leave room for a priority fee) times the price of SOL. |
 | Swaps | A single-asset pool (`exposure` = `single`) needs no swap, whatever the asset: you are assumed to hold it. A multi-asset pool takes a mix of tokens, so half of the position is swapped into the others on the way in and swapped back on the way out: `2 × 0.3% × P × 0.5`. An exposure that is missing or unknown counts as multi-asset. The 0.3% (swap fee plus slippage) and the one half are flat: they do not depend on the token, the pool's depth or your size, and one half is exact only for a pool of two tokens at equal weights. |
 | Impermanent loss | Only for pools with `ilRisk` = yes. If DeFiLlama has a 7-day figure `il7d` (it had none for any pool when this was written), it is scaled linearly to the holding period: `P × \|il7d\|/100 × T/7`. Otherwise, if the pool holds exactly two tokens with prices, it is **estimated**: take 30 days of daily prices of both tokens, the daily log returns of their price ratio, and their sample standard deviation times √365 (σ). The expected loss is then `P × σ² × T/365 / 8`, the small-move result for a 50/50 constant-product pool. Both are capped at 50% of P. The estimate assumes that the volatility of the last 30 days continues, needs at least 14 daily returns, and is a **lower bound for concentrated-liquidity pools** (Uniswap v3 and v4, Velodrome v3 and similar), whose positions can leave their range. With no figure and no estimate, no IL cost is added and the pool is flagged `IL_UNKNOWN`. |
-| Prices are looked up for every pool analysed | Impermanent loss is estimated for every pool that passes the filters, not only for the ones shown, and the pools are ranked after that. `--only-negative` and `--limit` then cut the ranked list. So the counts, the summary by chain and the order do not depend on the limit, and a pool that only loses money once IL is counted is found by `--only-negative`. The price of this is the lookups of a live run: 83 requests when this was written. |
+| Prices are looked up for every pool analysed | Impermanent loss is estimated for every pool that passes the filters, not only for the ones shown, and the pools are ranked after that. `--only-negative` and `--limit` then cut the ranked list. So the counts, the summary by chain and the order do not depend on the limit, and a pool that only loses money once IL is counted is found by `--only-negative`. The price of this is the lookups of a live run: 146 requests when this was written. |
 | What is not counted | Deposit or withdrawal fees that are not already in the APY, price impact, bridging, Solana account rent, taxes, lockups, depegs and smart contract risk. |
 | Net APY | One-off costs annualised: a loss of $3 on $1,000 over 30 days is shown as −3.7% a year. Short holds therefore look more extreme than long ones. |
 | TVL floor | Pools with less than $100,000 TVL are left out (`--min-tvl`). |
@@ -291,6 +303,7 @@ estimates read from the public endpoints on 2026-10-26 and rounded.
 
 | Chain | Pays fees in | Default gas price | Gas units | L1 data fee | One transaction at the defaults |
 | --- | --- | --- | --- | --- | --- |
+| Ethereum | ETH at $2,300 | 0.09 gwei | 200,000 | none (it is the L1) | $0.0414 |
 | Arbitrum | ETH at $2,300 | 0.02 gwei | 250,000 | $0.02 | $0.0315 |
 | OP Mainnet | ETH at $2,300 | 0.001 gwei | 250,000 | $0.02 | $0.0206 |
 | Base | ETH at $2,300 | 0.006 gwei | 250,000 | $0.02 | $0.0234 |
@@ -337,7 +350,7 @@ Please read these before relying on any number.
 - **Estimates, not advice.** The model is deliberately simple. It is meant to show where costs
   matter, not to predict what you will earn or lose.
 - **Impermanent loss is estimated, not measured.** DeFiLlama's `il7d` field was null for every one
-  of the 6,836 pools on these four chains when this tool was written (2026-10-26), and 5,091 of
+  of the 11,701 pools on these five chains when this tool was written (2026-10-26), and 7,821 of
   them have IL risk. So the loss is estimated from 30 days of prices, for pools that hold exactly
   two tokens: it is the loss of a 50/50 constant-product pool and assumes that last month's
   volatility continues. For concentrated-liquidity pools (Uniswap v3 and v4, Velodrome v3 and
@@ -350,9 +363,18 @@ Please read these before relying on any number.
   impermanent loss. The cost-negative counts are lower bounds for those pools.
 - **The data is DeFiLlama's.** If DeFiLlama's APY for a pool is wrong, stale or spiking, so is the
   result. Check the `APY_OUTLIER` flag, and look at the pool on DeFiLlama before you act.
-- **Costs are rough.** Gas units are the same for every transaction, the L1 data fee is a flat
-  $0.02, and the swap rate is flat. Real costs depend on the transaction, the congestion at the
-  moment, the route and your size. Offline runs use stale default prices.
+- **Costs are rough.** Gas units are the same for every transaction on a chain, the L1 data fee of
+  an L2 is a flat $0.02, and the swap rate is flat. Real costs depend on the transaction, the
+  congestion at the moment, the route and your size. Offline runs use stale default prices.
+- **Mainnet gas is the least stable input.** An Ethereum transaction is estimated at 200,000 gas
+  units, a round figure that the real transactions of a protocol can miss by a wide margin. The gas
+  price is one `eth_gasPrice` reading per run: 0.087 gwei, about $0.04 a transaction, on
+  2026-10-26, and 0.18 gwei later that day. That is why mainnet costs about what an L2 does in this
+  tool; it is not a property of mainnet. At 10 gwei one transaction is
+  200,000 × 10 gwei × $2,300 = $4.60, three are $13.80, and a $1,000 position needs more than 16.8%
+  APY to earn that back in 30 days. On the pools of 2026-10-26, 50% of the Ethereum pools were
+  cost-negative at 0.18 gwei, 68% at 2 gwei and 95% at 10 gwei: the count of the daily page
+  depends on the gas price of the hour it was made.
 - **A single-asset pool is assumed to need no swap**, because you are assumed to hold its asset. If
   you have to buy the asset first, that swap is not counted, and the pool costs more than shown.
 - **The reward haircut is a guess.** Some reward tokens hold their price and many do not.

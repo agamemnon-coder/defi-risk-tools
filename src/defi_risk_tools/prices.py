@@ -26,6 +26,7 @@ _GAVE_UP = f"gave up after {MAX_FAILED_REQUESTS_IN_A_ROW} failed requests in a r
 # DeFiLlama's coin prefix for each chain. Solana addresses are case-sensitive base58. The
 # addresses of the other chains are not: they are written in lowercase.
 COIN_PREFIXES = {
+    "Ethereum": "ethereum",
     "Arbitrum": "arbitrum",
     "OP Mainnet": "optimism",
     "Base": "base",

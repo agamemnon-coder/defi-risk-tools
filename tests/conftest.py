@@ -32,7 +32,7 @@ def fixture_path() -> Path:
 
 @pytest.fixture
 def sample_payload() -> dict:
-    """The real DeFiLlama response saved on 2026-10-26: 61 pools."""
+    """The real DeFiLlama response saved on 2026-10-26: 76 pools, 15 or 16 on each chain."""
     return json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
 
 

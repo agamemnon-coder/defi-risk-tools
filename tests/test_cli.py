@@ -75,7 +75,8 @@ def test_scan_prints_a_table_from_the_sample(sample, sample_payload):
     assert len(rows) == 10
     assert all("COST_NEGATIVE" in row for row in rows)  # the worst ten are all cost-negative
     analysed = len(sample_pools(sample_payload, advertising_apy=True))
-    assert f"Pools analysed: {analysed} on Arbitrum, OP Mainnet, Base, Solana." in result.stdout
+    chains = "Ethereum, Arbitrum, OP Mainnet, Base, Solana"
+    assert f"Pools analysed: {analysed} on {chains}." in result.stdout
     assert "not financial advice" in result.stdout
     assert "Position size" in result.stdout
 
@@ -99,7 +100,7 @@ def test_only_negative_shows_only_cost_negative_pools(sample):
     result = runner.invoke(app, ["scan", *sample, "--only-negative", "--limit", "100"])
 
     rows = table_rows(result.stdout)
-    assert 0 < len(rows) < 61
+    assert 0 < len(rows) < 76
     assert all("COST_NEGATIVE" in row for row in rows)
 
 
@@ -124,10 +125,11 @@ def test_a_chain_given_twice_is_scanned_once(sample, sample_payload):
 
 
 def test_an_unsupported_chain_is_a_usage_error_that_lists_the_supported_ones(sample):
-    result = runner.invoke(app, ["scan", *sample, "--chain", "Ethereum"])
+    result = runner.invoke(app, ["scan", *sample, "--chain", "Polygon"])
 
     assert result.exit_code == 2
-    assert "no cost data for chain 'Ethereum'" in result.stderr
+    assert "no cost data for chain 'Polygon'" in result.stderr
+    assert "Ethereum" in result.stderr
     assert "Arbitrum" in result.stderr
 
 
@@ -137,7 +139,7 @@ def test_min_tvl_leaves_small_pools_out_and_counts_them(sample):
     assert all(pool["tvl_usd"] >= 10_000_000 for pool in document["pools"])
     counts = document["counts"]
     assert counts["below_min_tvl"] > 0
-    assert counts["analysed"] + counts["below_min_tvl"] + counts["zero_apy"] == 61
+    assert counts["analysed"] + counts["below_min_tvl"] + counts["zero_apy"] == 76
 
 
 def test_pools_under_the_floor_are_left_out_unless_the_floor_is_lowered(sample_payload, tmp_path):
@@ -227,13 +229,15 @@ def test_json_output_is_pure_json_with_the_documented_shape(sample, sample_paylo
         "cost_negative": document["counts"]["cost_negative"],
         "shown": 5,
         "below_min_tvl": 0,
-        "zero_apy": 61 - analysed,
+        "zero_apy": 76 - analysed,
         "skipped_entries": 0,
         "il_risk": at_risk,  # counted over every pool analysed, not over the five shown
         "il_estimated": 0,  # an offline run without --prices-file estimates nothing
         "il_unknown": at_risk,  # and none of the pools with IL risk has a figure from DeFiLlama
     }
-    assert list(document["chain_summary"]) == ["Arbitrum", "OP Mainnet", "Base", "Solana"]
+    chains = ["Ethereum", "Arbitrum", "OP Mainnet", "Base", "Solana"]
+    assert list(document["chain_summary"]) == chains
+    assert list(document["chain_costs"]) == chains
 
 
 def test_json_puts_cost_negative_pools_first_by_advertised_apy_then_the_rest_by_net_apy(sample):
@@ -292,7 +296,7 @@ def test_include_zero_apy_brings_them_back(sample, sample_payload):
 
     pools = document["pools"]
     assert zero <= {pool["pool"] for pool in pools}
-    assert document["counts"]["analysed"] == 61
+    assert document["counts"]["analysed"] == 76
     assert document["counts"]["zero_apy"] == 0
     assert document["assumptions"]["include_zero_apy"] is True
     # They advertise the least, so they come last among the cost-negative pools whose APY is not an
@@ -344,7 +348,7 @@ def test_json_every_il_risk_pool_in_the_sample_is_also_il_unknown(sample):
     pools = scan_json(*sample, "--limit", "100", "--include-zero-apy")["pools"]
 
     il_risk = [pool for pool in pools if "IL_RISK" in pool["flags"]]
-    assert len(il_risk) == 28
+    assert len(il_risk) == 28 + 6  # six more on Ethereum
     assert all("IL_UNKNOWN" in pool["flags"] and pool["il_usd"] == 0 for pool in il_risk)
 
 
@@ -396,10 +400,78 @@ def test_the_swap_rule_applies_to_the_whole_sample(sample, sample_payload):
     pools = scan_json(*sample, "--limit", "100", "--include-zero-apy")["pools"]
     exposure = {raw["pool"]: raw["exposure"] for raw in sample_payload["data"]}
 
-    assert len(pools) == 61
+    assert len(pools) == 76
     for pool in pools:
         expected = 0.0 if exposure[pool["pool"]] == "single" else 3.0
         assert pool["swap_usd"] == pytest.approx(expected), (pool["chain"], pool["symbol"])
+
+
+# Ethereum mainnet
+
+
+def test_a_mainnet_pool_with_rewards_pays_four_transactions_of_200k_gas(sample):
+    # Morpho Blue SENPYUSDMAIN on Ethereum advertises 5.30517%: 2.25035% base and 3.05482% in
+    # rewards. At the default 0.09 gwei and $2,300 one transaction of 200,000 gas costs
+    # 200,000 * 0.09 gwei * $2,300 = $0.0414, and mainnet has no L1 data fee on top. It pays
+    # rewards, so a claim is a fourth transaction: 4 * $0.0414 = $0.1656. One asset: no swap.
+    pool = sample_pool_json(*sample, chain="Ethereum", project="morpho-blue", symbol="SENPYUSDMAIN")
+
+    assert pool["gas_usd"] == pytest.approx(4 * 0.0414)
+    assert pool["swap_usd"] == 0
+    # 1000 * 30/365 * (2.25035% + 3.05482% * (1 - 0.5)) = $3.1050
+    assert pool["gross_usd"] == pytest.approx(3.1050, abs=1e-4)
+    assert pool["net_usd"] == pytest.approx(3.1050 - 0.1656, abs=1e-4)  # +$2.94
+    assert pool["net_apy"] == pytest.approx(3.5763, abs=1e-4)
+    assert pool["flags"] == ["REWARD_DEPENDENT"]  # 3.05 of its 5.31 points are rewards
+    # gas / (yield per dollar over 30 days) = 0.1656 / (0.0377776 * 30/365) = $53.33
+    assert pool["break_even_size_usd"] == pytest.approx(53.33, abs=0.01)
+    assert pool["break_even_days"] == 2  # one day pays $0.1035, two days pay $0.2070
+
+
+def test_the_text_report_describes_a_mainnet_transaction_without_an_l1_fee(sample):
+    result = runner.invoke(app, ["scan", *sample, "--chain", "Ethereum"])
+
+    assert "Pools analysed: 15 on Ethereum." in result.stdout
+    flat = " ".join(result.stdout.split())
+    expected = (
+        "Ethereum $0.0414 per tx = 200,000 gas x 0.0900 gwei (default) x ETH $2,300.00 (default)"
+    )
+    assert expected in flat
+    assert "L1 data fee" not in flat.split("Cost of one transaction")[1]  # not on Ethereum
+
+
+def test_the_same_mainnet_pool_loses_money_when_gas_is_dear_and_not_when_it_is_cheap(live, sample):
+    # Aave v3 WETH on Ethereum advertises 1.31436%, which is $1.08 over 30 days on $1,000.
+    # Three transactions at the default gas price ($0.0414 each) cost $0.12: it keeps $0.96.
+    # In the live fixture gas is 1 gwei and ETH $3,000, so one transaction is
+    # 200,000 * 1 gwei * $3,000 = $0.60 and three are $1.80: it loses $0.72.
+    args = ["--chain", "Ethereum"]
+    cheap = sample_pool_json(*sample, *args, chain="Ethereum", project="aave-v3", symbol="WETH")
+    dear = sample_pool_json(*args, chain="Ethereum", project="aave-v3", symbol="WETH")
+
+    assert cheap["gross_usd"] == pytest.approx(1.0803, abs=1e-4)
+    assert cheap["gas_usd"] == pytest.approx(0.1242)
+    assert cheap["net_usd"] == pytest.approx(0.9561, abs=1e-4)
+    assert "COST_NEGATIVE" not in cheap["flags"]
+    assert dear["gas_usd"] == pytest.approx(1.80)
+    assert dear["net_usd"] == pytest.approx(1.0803 - 1.80, abs=1e-4)
+    assert "COST_NEGATIVE" in dear["flags"]
+
+
+def test_mainnet_gas_comes_from_its_own_rpc_and_costs_200k_gas_a_transaction(live, http_mock):
+    document = scan_json("--chain", "Ethereum", "--limit", "100")
+
+    ethereum = document["chain_costs"]["Ethereum"]
+    assert ethereum["usd_per_tx"] == pytest.approx(0.60)  # 200,000 gas * 1 gwei * $3,000
+    assert ethereum["gas_units"] == 200_000
+    assert ethereum["gas_price_gwei"] == pytest.approx(1.0)
+    assert ethereum["gas_price_source"] == "live"
+    assert ethereum["l1_fee_usd"] == 0
+    assert ethereum["native_symbol"] == "ETH"
+    hosts = {call.request.url.host for call in http_mock.calls}
+    assert hosts == {"yields.llama.fi", "coins.llama.fi", "ethereum-rpc.publicnode.com"}
+    assert live.rpc["Ethereum"].call_count == 1  # one eth_gasPrice call, no more
+    assert {pool["chain"] for pool in document["pools"]} == {"Ethereum"}
 
 
 # Impermanent loss from token prices
@@ -448,8 +520,17 @@ def test_a_prices_file_gives_the_pools_shown_an_estimated_il(sample, prices_path
     wbtc_usdc = pools[("Arbitrum", "WBTC.B-USDC")]
     assert wbtc_usdc["il_volatility"] == pytest.approx(0.259566, abs=1e-6)  # WBTC / USDC
     assert wbtc_usdc["il_usd"] == pytest.approx(0.6922, abs=1e-4)
+    # Uniswap v3 USDC-WETH on Ethereum advertises 6.97573%: $5.73 of yield. Three transactions at
+    # $0.0414 cost $0.12, a multi-asset pool swaps $3.00, and at a volatility of 0.412939 the IL
+    # is 1000 * 0.412939**2 * (30/365) / 8 = $1.75: it keeps $0.86.
+    mainnet = pools[("Ethereum", "USDC-WETH")]
+    assert mainnet["il_volatility"] == pytest.approx(0.412939, abs=1e-6)
+    assert mainnet["gas_usd"] == pytest.approx(0.1242)
+    assert mainnet["il_usd"] == pytest.approx(1.7519, abs=1e-4)
+    assert mainnet["net_usd"] == pytest.approx(0.8574, abs=1e-4)
+    assert mainnet["flags"] == ["IL_RISK", "IL_ESTIMATED"]
     assert document["price_source"] == f"file {prices_path}"
-    assert document["counts"]["il_estimated"] == 9
+    assert document["counts"]["il_estimated"] == 9 + 3  # three more on Ethereum
 
 
 def test_pools_that_cannot_be_estimated_stay_unknown(sample, prices_path):
@@ -465,15 +546,17 @@ def test_pools_that_cannot_be_estimated_stay_unknown(sample, prices_path):
         assert pool["il_volatility"] is None
     counts = document["counts"]
     at_risk = [pool for pool in document["pools"] if "IL_RISK" in pool["flags"]]
-    assert counts["il_estimated"] + counts["il_unknown"] == len(at_risk) == 24
-    assert counts["il_unknown"] == 15  # 3 hold a single token, 12 hold two that have no prices
+    assert counts["il_estimated"] + counts["il_unknown"] == len(at_risk) == 30
+    # 4 hold a single token or three, and 14 hold two that have no prices: 12 on the L2s and
+    # Solana, and Uniswap v2 PEPE-WETH and Balancer v2 BAL-WETH on Ethereum
+    assert counts["il_unknown"] == 18
     assert (
-        "Impermanent loss is estimated for 9 of the 21 pools with IL risk and two tokens. The "
-        "other 12 stay IL_UNKNOWN: no usable daily prices for one or both of their two tokens."
+        "Impermanent loss is estimated for 12 of the 26 pools with IL risk and two tokens. The "
+        "other 14 stay IL_UNKNOWN: no usable daily prices for one or both of their two tokens."
     ) in document["notes"]
 
 
-@pytest.mark.parametrize("limit", [1, 7, 10, 53, 100])
+@pytest.mark.parametrize("limit", [1, 7, 10, 68, 100])
 def test_the_limit_only_cuts_the_list_and_changes_neither_the_order_nor_the_counts(
     sample, prices_path, limit
 ):
@@ -483,10 +566,10 @@ def test_the_limit_only_cuts_the_list_and_changes_neither_the_order_nor_the_coun
     cut = scan_json(*args, "--limit", str(limit))
 
     assert cut["pools"] == full["pools"][:limit]
-    assert cut["counts"] == {**full["counts"], "shown": min(limit, 53)}
+    assert cut["counts"] == {**full["counts"], "shown": min(limit, 68)}
     assert cut["chain_summary"] == full["chain_summary"]
-    assert cut["counts"]["analysed"] == 53
-    assert cut["counts"]["cost_negative"] == 12
+    assert cut["counts"]["analysed"] == 68
+    assert cut["counts"]["cost_negative"] == 18
 
 
 def test_the_headline_counts_of_the_text_report_do_not_depend_on_the_limit(sample, prices_path):
@@ -495,14 +578,11 @@ def test_the_headline_counts_of_the_text_report_do_not_depend_on_the_limit(sampl
     few = runner.invoke(app, [*args, "--limit", "2"]).stdout
     many = runner.invoke(app, [*args, "--limit", "40"]).stdout
 
-    assert (
-        "Pools analysed: 53 on Arbitrum, OP Mainnet, Base, Solana. Cost-negative: 12. Shown: 2."
-        in few
+    headline = (
+        "Pools analysed: 68 on Ethereum, Arbitrum, OP Mainnet, Base, Solana. Cost-negative: 18."
     )
-    assert (
-        "Pools analysed: 53 on Arbitrum, OP Mainnet, Base, Solana. Cost-negative: 12. Shown: 40."
-        in many
-    )
+    assert f"{headline} Shown: 2." in few
+    assert f"{headline} Shown: 40." in many
     assert by_chain_lines(few) == by_chain_lines(many)
 
 
@@ -513,7 +593,7 @@ def test_only_negative_keeps_the_counts_of_every_pool_analysed(sample, prices_pa
 
     assert len(document["pools"]) == 3
     assert document["counts"]["shown"] == 3
-    assert (document["counts"]["analysed"], document["counts"]["cost_negative"]) == (53, 12)
+    assert (document["counts"]["analysed"], document["counts"]["cost_negative"]) == (68, 18)
 
 
 def test_the_text_report_says_how_much_il_was_estimated(sample, prices_path):
@@ -521,10 +601,8 @@ def test_the_text_report_says_how_much_il_was_estimated(sample, prices_path):
         app, ["scan", *sample, "--prices-file", str(prices_path), "--limit", "100"]
     )
 
-    assert (
-        "Impermanent loss: estimated from token prices for 9 of the 24 analysed pools with IL risk."
-        in result.stdout
-    )
+    il_line = "Impermanent loss: estimated from token prices for 12 of the 30 analysed pools"
+    assert f"{il_line} with IL risk." in result.stdout
     assert f"Prices: file {prices_path}" in result.stdout
     assert "IL_ESTIMATED" in result.stdout
 
@@ -675,7 +753,7 @@ def test_a_limit_of_one_shows_the_pool_that_leads_once_il_is_counted_and_counts_
         "il_estimated": 1,
         "il_unknown": 0,
     }
-    for other in ("OP Mainnet", "Base", "Solana"):
+    for other in ("Ethereum", "OP Mainnet", "Base", "Solana"):
         assert document["chain_summary"][other]["analysed"] == 0
         assert document["chain_summary"][other]["cost_negative_share"] is None
 
@@ -687,6 +765,7 @@ def test_a_limit_of_one_shows_the_pool_that_leads_once_il_is_counted_and_counts_
 SUMMARY_FIELDS = ("analysed", "cost_negative", "il_risk", "il_estimated", "il_unknown")
 SAMPLE_BY_CHAIN = {
     # chain: analysed, cost-negative, with IL risk, IL estimated, IL unknown
+    "Ethereum": (15, 6, 6, 3, 3),
     "Arbitrum": (12, 2, 6, 4, 2),
     "OP Mainnet": (11, 2, 4, 1, 3),
     "Base": (15, 2, 8, 4, 4),
@@ -703,7 +782,7 @@ def test_the_summary_by_chain_of_the_sample(sample, prices_path):
         chain: tuple(entry[field] for field in SUMMARY_FIELDS) for chain, entry in summary.items()
     } == SAMPLE_BY_CHAIN
     shares = [entry["cost_negative_share"] for entry in summary.values()]
-    assert shares == [0.166667, 0.181818, 0.133333, 0.4]  # 2/12, 2/11, 2/15 and 6/15
+    assert shares == [0.4, 0.166667, 0.181818, 0.133333, 0.4]  # 6/15, 2/12, 2/11, 2/15 and 6/15
 
 
 def test_the_summary_by_chain_agrees_with_the_pools_it_summarises(
@@ -741,11 +820,12 @@ def test_the_text_report_has_the_summary_by_chain(sample, prices_path):
     assert rows[0] == ["By chain"]
     assert rows[1] == ["chain", "analysed", "cost-negative", "share", "IL estimated"]
     assert rows[3:] == [
+        ["Ethereum", "15", "6", "40.0%", "3 of 6"],
         ["Arbitrum", "12", "2", "16.7%", "4 of 6"],
         ["OP Mainnet", "11", "2", "18.2%", "1 of 4"],
         ["Base", "15", "2", "13.3%", "4 of 8"],
         ["Solana", "15", "6", "40.0%", "0 of 6"],
-        ["all chains", "53", "12", "22.6%", "9 of 24"],
+        ["all chains", "68", "18", "26.5%", "12 of 30"],
     ]
 
 
@@ -761,18 +841,19 @@ def test_report_summarises_the_chains_above_the_pools(sample, prices_path, tmp_p
     )
 
     assert result.exit_code == 0, result.stderr
-    assert "12 of 53 analysed are cost-negative" in result.stdout
+    assert "18 of 68 analysed are cost-negative" in result.stdout
     page = out.read_text(encoding="utf-8")
-    assert "Cost-negative: 12. Shown: 5." in page
+    assert "Cost-negative: 18. Shown: 5." in page
     section = page.split("<h2>By chain</h2>")[1].split("<h2>Pools</h2>")[0]
     assert re.findall(r'<th scope="row">([^<]*)</th>', section) == [*SAMPLE_BY_CHAIN, "all chains"]
     cells = re.findall(r'<td class="num">([^<]*)</td>', section)
     assert cells == [
+        *["15", "6", "40.0%", "3 of 6"],
         *["12", "2", "16.7%", "4 of 6"],
         *["11", "2", "18.2%", "1 of 4"],
         *["15", "2", "13.3%", "4 of 8"],
         *["15", "6", "40.0%", "0 of 6"],
-        *["53", "12", "22.6%", "9 of 24"],
+        *["68", "18", "26.5%", "12 of 30"],
     ]
     assert page.split("<h2>Pools</h2>")[1].split("<h2>Flags</h2>")[0].count("<tr") == 5 + 1
 
@@ -825,7 +906,7 @@ def test_report_with_a_prices_file_shows_the_estimated_il(sample, prices_path, t
 
     assert result.exit_code == 0, result.stderr
     page = out.read_text(encoding="utf-8")
-    assert page.count("IL est.") == 9
+    assert page.count("IL est.") == 12
     assert "IL_ESTIMATED" in page
     assert f"Prices: file {prices_path}" in page
     assert "lower bound" in page
@@ -860,7 +941,7 @@ def live(http_mock, sample_payload, prices_payload, chart_server):
         }
     )
     rpc = {}
-    for chain in ("Arbitrum", "OP Mainnet", "Base"):
+    for chain in ("Ethereum", "Arbitrum", "OP Mainnet", "Base"):
         rpc[chain] = http_mock.post(COST_TABLE[chain].rpc_url).respond(
             json={"jsonrpc": "2.0", "id": 1, "result": hex(1_000_000_000)}
         )
@@ -868,6 +949,7 @@ def live(http_mock, sample_payload, prices_payload, chart_server):
 
 
 COIN_PREFIXES = {
+    "Ethereum": "ethereum",
     "Arbitrum": "arbitrum",
     "OP Mainnet": "optimism",
     "Base": "base",
@@ -962,12 +1044,13 @@ def test_a_long_list_looks_up_prices_in_batches_of_ten(live, sample_payload, lim
     document = scan_json("--limit", limit, "--include-zero-apy")
 
     wanted = coins_of_pools_that_can_be_priced(sample_payload, include_zero_apy=True)
-    assert len(wanted) == 26  # 24 pools, and the same token appears in several of them
-    assert [len(request) for request in live.chart.requests] == [10, 10, 6]
-    assert (
-        document["counts"]["il_estimated"] == 10
-    )  # the pools whose tokens are in the saved prices
-    assert document["counts"]["il_unknown"] == 14 + 4  # no prices for them, or just one token
+    # 30 pools with two tokens (24 and 5 on Ethereum plus the one with no APY), and the same token
+    # appears in several of them: 26 coins on the L2s and Solana, and 6 on Ethereum
+    assert len(wanted) == 26 + 6
+    assert [len(request) for request in live.chart.requests] == [10, 10, 10, 2]
+    counts = document["counts"]
+    assert counts["il_estimated"] == 10 + 3  # the pools whose tokens are in the saved prices
+    assert counts["il_unknown"] == 14 + 4 + 3  # no prices for them, or just one token or three
 
 
 def test_a_saved_prices_file_replaces_the_chart_endpoint(live, prices_path):
