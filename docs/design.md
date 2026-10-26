@@ -121,3 +121,24 @@ For each pool:
 2. **Zero-APY pools.** Pools whose advertised `apy` is 0 or less are left out by default, since
    they mislead nobody. `--include-zero-apy` brings them back. The report says how many were left
    out.
+3. **Impermanent loss from prices.** DeFiLlama's `il7d` is null for every pool, so IL is estimated
+   for a pool with `ilRisk == "yes"`, no `il7d` and exactly two `underlyingTokens`.
+   - **Data:** `GET https://coins.llama.fi/chart/{coins}?span=30&period=1d`, with the coins as
+     `<prefix>:<address>` and the prefixes `arbitrum`, `optimism`, `base` and `solana`. The
+     response is `{"coins": {key: {"symbol", "prices": [{"timestamp", "price"}]}}}`. At most ten
+     coins go in a request (one request for 26 coins, several of them obscure, was rejected with
+     HTTP 400 and one for 9 major tokens was accepted; the cause is not known); a rejected request
+     is split in two; a failed request is skipped after one retry.
+   - **Volatility:** each price of one token is paired with the nearest price of the other (they
+     are within half a day, but their timestamps differ by minutes). `sigma` is the sample
+     standard deviation of the daily log returns of the price ratio, times `sqrt(365)`. At least 14
+     daily returns are needed.
+   - **Loss:** `P × sigma² × (T/365) / 8`, the small-move result for a 50/50 constant-product
+     pool, capped at 50% of `P` like the `il7d` figure. The pool is flagged `IL_ESTIMATED`. For
+     concentrated-liquidity pools (Uniswap v3 and v4, Velodrome v3) it is a lower bound. Pools
+     with another number of tokens, or without prices, keep `IL_UNKNOWN`.
+   - **When:** only for the pools that survive the filters and `--limit` (the ranking is decided
+     without IL; the pools shown are then evaluated and ranked again).
+   - **Offline:** `--from-file` makes no network calls. `--prices-file` is a saved chart response
+     for offline runs; without it IL stays unknown. `tests/fixtures/prices_sample.json` is one,
+     for the major tokens of the fixture's pools.

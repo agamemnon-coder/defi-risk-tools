@@ -1,17 +1,24 @@
 """The `yield-scan` command line."""
 
+from contextlib import ExitStack
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, NoReturn
 
+import httpx
 import typer
 
-from defi_risk_tools import costs, data, model
+from defi_risk_tools import costs, data, model, prices
 from defi_risk_tools.report import Scan, render_html, render_json, render_text
 
 DEFAULTS = model.Assumptions()
 DEFAULT_MIN_TVL_USD = 100_000.0
 DEFAULT_LIMIT = 50
+NO_PRICES_NOTE = (
+    "Offline run without --prices-file: no token prices, so impermanent loss is not estimated "
+    "and pools with IL risk stay IL_UNKNOWN."
+)
 
 app = typer.Typer(
     help=(
@@ -78,6 +85,18 @@ FromFileOption = Annotated[
         "gas and token prices are the defaults from the cost table.",
     ),
 ]
+PricesFileOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--prices-file",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="A saved chart response (GET https://coins.llama.fi/chart/{coins}?span=30&period=1d) "
+        "to estimate impermanent loss from, instead of calling the API. Without it, an offline "
+        "run does not estimate impermanent loss.",
+    ),
+]
 
 
 @app.command()
@@ -92,6 +111,7 @@ def scan(
     include_zero_apy: IncludeZeroApyOption = False,
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON instead of a table.")] = False,
     from_file: FromFileOption = None,
+    prices_file: PricesFileOption = None,
 ) -> None:
     """Show which yields lose money once costs are counted, worst first."""
     result = build_scan(
@@ -104,6 +124,7 @@ def scan(
         only_negative=only_negative,
         include_zero_apy=include_zero_apy,
         from_file=from_file,
+        prices_file=prices_file,
     )
     typer.echo(render_json(result) if as_json else render_text(result))
 
@@ -122,6 +143,7 @@ def write_report(
     only_negative: OnlyNegativeOption = False,
     include_zero_apy: IncludeZeroApyOption = False,
     from_file: FromFileOption = None,
+    prices_file: PricesFileOption = None,
 ) -> None:
     """Write the same scan as one self-contained HTML page (no scripts, no CDN)."""
     result = build_scan(
@@ -134,6 +156,7 @@ def write_report(
         only_negative=only_negative,
         include_zero_apy=include_zero_apy,
         from_file=from_file,
+        prices_file=prices_file,
     )
     page = render_html(result, generated_on=datetime.now(UTC).date())
     try:
@@ -158,54 +181,97 @@ def build_scan(
     only_negative: bool,
     include_zero_apy: bool,
     from_file: Path | None,
+    prices_file: Path | None,
 ) -> Scan:
-    """Fetch (or read) the pools, run the model on the ones in scope and rank the results."""
+    """Fetch (or read) the pools, run the model on the ones in scope and rank the results.
+
+    Impermanent loss is estimated last, and only for the pools that are going to be shown, so that
+    token prices are looked up for a handful of pools and not for thousands.
+    """
     try:
         wanted = [costs.canonical_chain(name) for name in chains or costs.DEFAULT_CHAINS]
     except ValueError as error:
         raise typer.BadParameter(str(error), param_hint="--chain") from error
     wanted = list(dict.fromkeys(wanted))  # drop repeats, keep the order
     assumptions = model.Assumptions(size_usd=size, days=days, haircut=haircut)
+    saved_prices = _read_prices_file(prices_file)
 
-    try:
-        if from_file is None:
-            with data.make_client() as client:
-                parsed = data.fetch_pools(client)
-                tx_costs, notes = costs.resolve_tx_costs(wanted, client)
-            source = "DeFiLlama yields API (live)"
-        else:
-            parsed = data.load_pools_file(from_file)
-            tx_costs, notes = costs.resolve_tx_costs(wanted, None)
-            source = f"file {from_file}"
-    except data.DataError as error:
-        hint = "" if from_file else " Use --from-file with a saved pools JSON to work offline."
-        fail(f"{error}.{hint}")
+    with ExitStack() as stack:
+        client = None if from_file else stack.enter_context(data.make_client())
+        parsed = _read_pools(from_file, client)
+        tx_costs, notes = costs.resolve_tx_costs(wanted, client)
 
-    selection = model.select_pools(
-        parsed.pools, chains=wanted, min_tvl_usd=min_tvl, include_zero_apy=include_zero_apy
-    )
-    ranked = model.rank(
+        def evaluate(pool: data.Pool) -> model.PoolResult:
+            return model.evaluate_pool(pool, assumptions, tx_costs[pool.chain].usd)
+
+        selection = model.select_pools(
+            parsed.pools, chains=wanted, min_tvl_usd=min_tvl, include_zero_apy=include_zero_apy
+        )
+        ranked = model.rank([evaluate(pool) for pool in selection.pools])
+        cost_negative = [result for result in ranked if result.cost_negative]
+        visible = (cost_negative if only_negative else ranked)[:limit]
+
+        lookup, price_source = _price_lookup(saved_prices, prices_file, client)
+        volatilities, il_notes = prices.estimate_volatilities([r.pool for r in visible], lookup)
+
+    # A pool with a measured volatility is evaluated again, now with its impermanent loss. That can
+    # make it cost-negative, so the pools shown are ranked again.
+    shown = model.rank(
         [
-            model.evaluate_pool(pool, assumptions, tx_costs[pool.chain].usd)
-            for pool in selection.pools
+            evaluate(replace(result.pool, il_volatility=volatilities[result.pool.pool_id]))
+            if result.pool.pool_id in volatilities
+            else result
+            for result in visible
         ]
     )
-    cost_negative = [result for result in ranked if result.cost_negative]
-    shown = (cost_negative if only_negative else ranked)[:limit]
+    cost_negative_count = (
+        len(cost_negative)
+        - sum(result.cost_negative for result in visible)
+        + sum(result.cost_negative for result in shown)
+    )
     return Scan(
         rows=shown,
         assumptions=assumptions,
         min_tvl_usd=min_tvl,
         include_zero_apy=include_zero_apy,
         tx_costs=tx_costs,
-        source=source,
+        source=f"file {from_file}" if from_file else "DeFiLlama yields API (live)",
+        price_source=price_source,
         analysed=len(ranked),
-        cost_negative=len(cost_negative),
+        cost_negative=cost_negative_count,
         below_min_tvl=selection.below_min_tvl,
         zero_apy=selection.zero_apy,
         skipped_entries=parsed.skipped,
-        notes=notes,
+        notes=[*notes, *il_notes],
     )
+
+
+def _read_pools(from_file: Path | None, client: httpx.Client | None) -> data.ParsedPools:
+    try:
+        return data.fetch_pools(client) if client else data.load_pools_file(from_file)
+    except data.DataError as error:
+        hint = "" if from_file else " Use --from-file with a saved pools JSON to work offline."
+        fail(f"{error}.{hint}")
+
+
+def _read_prices_file(path: Path | None) -> dict | None:
+    if path is None:
+        return None
+    try:
+        return prices.load_series(path)
+    except data.DataError as error:
+        fail(str(error))
+
+
+def _price_lookup(
+    saved: dict | None, path: Path | None, client: httpx.Client | None
+) -> tuple[prices.Lookup, str]:
+    """Where token prices come from: the saved file if there is one, else the API, else nowhere."""
+    if saved is not None:
+        return (lambda keys: (saved, [])), f"file {path}"
+    if client is not None:
+        return (lambda keys: prices.fetch_series(client, keys)), "DeFiLlama chart API (live)"
+    return (lambda keys: ({}, [NO_PRICES_NOTE])), "none (offline run without --prices-file)"
 
 
 def fail(message: str) -> NoReturn:

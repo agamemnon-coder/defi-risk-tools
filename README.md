@@ -32,7 +32,8 @@ It is free and open source (MIT). Version 1 covers Arbitrum, OP Mainnet, Base an
 ## Example
 
 ```console
-$ uv run yield-scan scan --from-file tests/fixtures/pools_sample.json --limit 10
+$ uv run yield-scan scan --from-file tests/fixtures/pools_sample.json \
+>   --prices-file tests/fixtures/prices_sample.json --limit 10
 ```
 
 ```text
@@ -41,19 +42,21 @@ Cost-Negative Yield Scanner  -  estimates only, not financial advice
 chain       project            symbol               TVL  APY (base+reward)  costs  net APY  break-even size  flags
 ----------  -----------------  ---------------  -------  -----------------  -----  -------  ---------------  -------------------------------------------------
 Solana      loopscale-lending  USD.INFRA          $8.0M          2.99+5.25  $6.02    -1.7%            never  COST_NEGATIVE,REWARD_DEPENDENT
-Arbitrum    gmx-evm            ETH-USDC          $47.5M          6.77+0.00  $6.09   -0.65%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
+Arbitrum    gmx-evm            ETH-USDC          $47.5M          6.77+0.00  $7.73    -2.6%            never  COST_NEGATIVE,IL_RISK,IL_ESTIMATED
 Base        morpho-blue        GROVE-STEAKUSDC  $438.5M          4.67+0.00  $6.07    -2.7%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
 OP Mainnet  morpho-blue        RE7WETH            $3.2M          0.82+2.92  $6.08    -5.1%            never  COST_NEGATIVE,REWARD_DEPENDENT
 Base        aave-v3            WETH              $42.1M          1.39+1.86  $6.09    -5.1%            never  COST_NEGATIVE,REWARD_DEPENDENT
 Arbitrum    morpho-blue        KPK-EURE-YIELD     $1.6M          0.13+2.87  $6.13    -5.9%            never  COST_NEGATIVE,REWARD_DEPENDENT,IL_RISK,IL_UNKNOWN
-Arbitrum    gmx-evm            WBTC.B-USDC       $56.9M          2.54+0.00  $6.09    -4.9%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
+Arbitrum    gmx-evm            WBTC.B-USDC       $56.9M          2.54+0.00  $6.79    -5.7%            never  COST_NEGATIVE,IL_RISK,IL_ESTIMATED
 OP Mainnet  uniswap-v3         USDC-ZCHF          $1.5M          1.28+0.00  $6.06    -6.1%            never  COST_NEGATIVE
 Base        aerodrome-v1       VVV-DIEM           $9.0M          0.00+0.80  $6.09    -7.0%            never  COST_NEGATIVE,REWARD_DEPENDENT,IL_RISK,IL_UNKNOWN
 Solana      kamino-lend        BONKSOL            $5.7M          0.00+0.33  $6.02    -7.2%            never  COST_NEGATIVE,REWARD_DEPENDENT,APY_OUTLIER
 
 Pools analysed: 53 on Arbitrum, OP Mainnet, Base, Solana. Cost-negative: 19. Shown: 10.
 Left out: 0 under the TVL floor, 8 advertising an APY of 0 or less, 0 unreadable entries in the source.
+Impermanent loss: estimated from token prices for 2 of the 5 pools shown with IL risk.
 Source: file tests/fixtures/pools_sample.json
+Prices: file tests/fixtures/prices_sample.json
 Sorted with cost-negative pools first, the highest advertised APY leading, then the other pools by net APY, highest first.
 ```
 
@@ -61,8 +64,9 @@ The real output goes on to print the assumptions, the cost of one transaction on
 notes (for example that a gas price fell back to its default) and the disclaimer. That is the
 rule of the tool: every report states the assumptions it was computed with.
 
-The fixture is a real DeFiLlama response saved on 2026-10-26 (61 pools), and `--from-file` makes no
-network calls, so you get the same output as above.
+The fixture is a real DeFiLlama response saved on 2026-10-26 (61 pools). `--prices-file` is a real
+chart response from the same day with 30 daily prices of WETH, USDC, WBTC and cbBTC. Both
+options make the run offline: no network calls, so you get the same output as above.
 
 The first rows are the most misleading pools: they advertise a real APY and lose money anyway.
 USD.INFRA on Solana shows 8.24% a year, but 5.25 points of that are reward tokens (half of which
@@ -70,6 +74,12 @@ are assumed lost) and getting in and out of it costs $6.00 in swaps, so $1,000 h
 ends $1.41 down. "Net APY" annualises the result: -1.7% a year. Pools that advertise no APY at
 all are left out (8 of the 61 here), because they mislead nobody; `--include-zero-apy` brings them
 back.
+
+Two rows show the impermanent loss estimate. GMX ETH-USDC and GMX WBTC.B-USDC are flagged
+`IL_ESTIMATED`: over the last 30 days the WETH/USDC price ratio had a volatility of 40% a year, so
+$1,000 held for 30 days is expected to lose 1000 × 0.40² × 30/365 / 8 = $1.64 to impermanent loss,
+and the costs go from $6.09 to $7.73. The three other pools with IL risk stay `IL_UNKNOWN`: two
+hold a single token, and the tokens of VVV-DIEM have no prices in the saved file.
 
 A sample report built from the same data is in [`docs/report.html`](docs/report.html).
 
@@ -102,6 +112,7 @@ $ uv run yield-scan report --out report.html   # one self-contained HTML page
 | `--include-zero-apy` | off | Also show pools that advertise an APY of 0 or less. They are left out by default: they mislead nobody. |
 | `--json` | off | Print JSON instead of the table (`scan` only). |
 | `--from-file PATH` | none | Read a saved pools JSON instead of calling the API. |
+| `--prices-file PATH` | none | A saved chart response to estimate impermanent loss from, instead of calling the API. |
 | `--out PATH` | `report.html` | Where `report` writes the page (`report` only). |
 
 Exit codes: 0 on success, 1 if data could not be fetched or read or a file could not be written,
@@ -122,6 +133,20 @@ $ curl -o pools.json https://yields.llama.fi/pools      # about 11 MB
 $ uv run yield-scan scan --from-file pools.json
 ```
 
+`--prices-file` does the same for token prices: it is a saved response from
+`https://coins.llama.fi/chart/{coins}?span=30&period=1d`, where `{coins}` is a comma-separated list
+of `<prefix>:<address>` with the prefix `arbitrum`, `optimism`, `base` or `solana` (the addresses
+of a pool are in the `underlying_tokens` of `scan --json`). With it, impermanent loss is estimated
+offline. Without it, an offline run does not estimate impermanent loss, and says so. Ask for ten
+coins or so at a time: when this was written, DeFiLlama rejected one request for 26 coins (several
+of them obscure tokens, some on Solana) with HTTP 400 and accepted one for 9 major tokens. The cause
+is not known, so the tool asks for at most ten at a time and splits a rejected request.
+
+```console
+$ curl -o prices.json "https://coins.llama.fi/chart/arbitrum:0x82af49447d8a07e3bd95bd0d56f35241523fbab1,arbitrum:0xaf88d065e77c8cc2239327c5edb3a432268e5831?span=30&period=1d"
+$ uv run yield-scan scan --from-file pools.json --prices-file prices.json
+```
+
 ### What goes over the network
 
 Without `--from-file`, the tool makes HTTP requests to public endpoints, with a 20 second timeout
@@ -132,18 +157,26 @@ and one retry. It uses no API key and has no wallet.
   and SOL.
 - One read-only `eth_gasPrice` JSON-RPC call to each public RPC of the chains scanned:
   `https://arb1.arbitrum.io/rpc`, `https://mainnet.optimism.io`, `https://mainnet.base.org`.
+- `GET https://coins.llama.fi/chart/{coins}?span=30&period=1d`: 30 daily prices of the tokens of
+  the pools shown that have IL risk and hold exactly two tokens, at most ten coins per request.
+  Nothing is asked for the other pools, and `--prices-file` replaces these calls.
 
 If a price or gas call fails, the default from the cost table is used and the report says so.
-If the pools call fails, the tool stops with an error.
+If a chart request fails, its coins are skipped and the pools that need them stay `IL_UNKNOWN`. If
+DeFiLlama rejects a chart request (HTTP 400), it is split in two and tried again, so one bad coin
+costs only itself. A request that the server rejected (a 4xx other than a timeout or a rate limit)
+is not sent twice. If the pools call fails, the tool stops with an error.
 
 ### JSON output
 
-`scan --json` prints one JSON document: `assumptions`, `chain_costs` (the cost of one transaction
-per chain and where each input came from), `counts`, `notes` and `pools`. Each pool has `pool` (the
-DeFiLlama id), `chain`, `project`, `symbol`, `tvl_usd`, `apy`, `apy_base`, `apy_reward`, `gross_usd`,
-`gas_usd`, `swap_usd`, `il_usd`, `costs_usd`, `net_usd`, `net_apy`, `break_even_size_usd`,
-`break_even_days`, `flags`, `reward_tokens` and `underlying_tokens`. `break_even_size_usd` and
-`break_even_days` are `null` when there is none.
+`scan --json` prints one JSON document: `source` and `price_source`, `assumptions`, `chain_costs`
+(the cost of one transaction per chain and where each input came from), `counts` (including how
+many of the pools shown have an estimated IL or none), `notes` and `pools`. Each pool has `pool`
+(the DeFiLlama id), `chain`, `project`, `symbol`, `tvl_usd`, `apy`, `apy_base`, `apy_reward`,
+`gross_usd`, `gas_usd`, `swap_usd`, `il_usd`, `costs_usd`, `net_usd`, `net_apy`,
+`break_even_size_usd`, `break_even_days`, `il_volatility`, `flags`, `reward_tokens` and
+`underlying_tokens`. `break_even_size_usd`, `break_even_days` and `il_volatility` are `null` when
+there is none.
 
 ## How the numbers are made
 
@@ -152,7 +185,9 @@ For every pool, with position size P, holding period T (in days) and reward hair
 1. **Gross yield** = `P × apyBase/100 × T/365 + P × apyReward/100 × T/365 × (1 − h)`
 2. **Gas** = `(enter + exit + claims) × cost of one transaction`
 3. **Swaps** = `2 × 0.3% × P`, unless the pool is a single-asset stablecoin pool
-4. **Impermanent loss** = `P × |il7d|/100 × T/7`, capped at 50% of P, if DeFiLlama gives `il7d`
+4. **Impermanent loss** = `P × |il7d|/100 × T/7` if DeFiLlama gives `il7d`; otherwise, for a pool
+   with two priced tokens, `P × σ² × T/365 / 8`, where σ is the annualised volatility of the price
+   ratio of the two tokens. Capped at 50% of P.
 5. **Net** = gross − gas − swaps − impermanent loss. The pool is `COST_NEGATIVE` when net < 0.
 6. **Net APY** = `net / P × 365/T × 100`
 
@@ -188,7 +223,8 @@ they live in `Assumptions` in `src/defi_risk_tools/model.py` and the cost table 
 | Cost of one EVM transaction | `gas units × gas price × price of ETH + L1 data fee`. 250,000 gas units on every L2. The gas price is one `eth_gasPrice` call at run time. The L1 data fee is a flat $0.02 per transaction: a rough estimate, not a measurement. |
 | Cost of one Solana transaction | A fixed 0.00005 SOL (ten times the 5,000 lamport base fee, to leave room for a priority fee) times the price of SOL. |
 | Swaps | You are assumed to hold stablecoins and nothing else. Every pool except a single-asset stablecoin pool (`stablecoin` true and `exposure` single) needs one swap in and one swap out, each costing 0.3% of the position (swap fee plus slippage). The rate is flat: it does not depend on the token, the pool's depth or your size. |
-| Impermanent loss | Only for pools with `ilRisk` = yes **and** a 7-day figure `il7d`: the 7-day IL is scaled linearly to the holding period (`P × |il7d|/100 × T/7`) and capped at 50% of P. With no figure, no IL cost is added and the pool is flagged `IL_UNKNOWN`. |
+| Impermanent loss | Only for pools with `ilRisk` = yes. If DeFiLlama has a 7-day figure `il7d` (it had none for any pool when this was written), it is scaled linearly to the holding period: `P × \|il7d\|/100 × T/7`. Otherwise, if the pool holds exactly two tokens with prices, it is **estimated**: take 30 days of daily prices of both tokens, the daily log returns of their price ratio, and their sample standard deviation times √365 (σ). The expected loss is then `P × σ² × T/365 / 8`, the small-move result for a 50/50 constant-product pool. Both are capped at 50% of P. The estimate assumes that the volatility of the last 30 days continues, needs at least 14 daily returns, and is a **lower bound for concentrated-liquidity pools** (Uniswap v3 and v4, Velodrome v3 and similar), whose positions can leave their range. With no figure and no estimate, no IL cost is added and the pool is flagged `IL_UNKNOWN`. |
+| Prices are looked up for the pools shown | The ranking, `--only-negative` and `--limit` are decided first, without impermanent loss. Then prices are looked up for the pools that remain, those pools are evaluated again with their IL and ranked again. So a pool that only loses money once IL is counted can be missing from a short list, and a larger `--limit` widens the search. |
 | What is not counted | Deposit or withdrawal fees that are not already in the APY, price impact, bridging, Solana account rent, taxes, lockups, depegs and smart contract risk. |
 | Net APY | One-off costs annualised: a loss of $6 on $1,000 over 30 days is shown as −7.3% a year. Short holds therefore look more extreme than long ones. |
 | TVL floor | Pools with less than $100,000 TVL are left out (`--min-tvl`). |
@@ -229,14 +265,16 @@ To support another chain, add an entry to `COST_TABLE` in `src/defi_risk_tools/c
 | `APY_OUTLIER` | DeFiLlama marks the pool as an outlier, or its APY is more than 3 times its 30-day mean. |
 | `LOW_TVL` | Under $100,000 TVL. It only shows up if you lower `--min-tvl` below that. |
 | `IL_RISK` | DeFiLlama says the pool carries impermanent loss risk. |
-| `IL_UNKNOWN` | `IL_RISK`, but there is no `il7d` figure, so no IL cost is counted. |
+| `IL_ESTIMATED` | `IL_RISK`, and the impermanent loss was estimated from 30 days of token prices (a lower bound for concentrated liquidity). |
+| `IL_UNKNOWN` | `IL_RISK`, but there is neither an `il7d` figure nor an estimate (another number of tokens than two, no prices, or an offline run without `--prices-file`), so no IL cost is counted. |
 
 ### Sorting
 
 The most misleading pools come first. Cost-negative pools lead, and among them the pools that
 advertise the **highest APY**: they look the best and lose money. The other pools follow, by
 net APY, highest first. Ties are broken by TVL (largest first) and then by name, so the same data
-always gives the same order. `--only-negative` is applied before `--limit`.
+always gives the same order. `--only-negative` is applied before `--limit`. The order is decided
+before impermanent loss is estimated; the pools that are left are ranked again afterwards.
 
 ## Limitations
 
@@ -244,11 +282,17 @@ Please read these before relying on any number.
 
 - **Estimates, not advice.** The model is deliberately simple. It is meant to show where costs
   matter, not to predict what you will earn or lose.
-- **Impermanent loss is mostly not priced.** DeFiLlama's `il7d` field was null for every one of the
-  6,836 pools on these four chains when this tool was written (2026-10-26), and 5,091 of them have
-  IL risk. So every pool with IL risk is also `IL_UNKNOWN`, and its net APY is **too optimistic**:
-  the real result for a volatile liquidity pool can be much worse than shown. The code does price
-  IL whenever the figure is present.
+- **Impermanent loss is estimated, not measured.** DeFiLlama's `il7d` field was null for every one
+  of the 6,836 pools on these four chains when this tool was written (2026-10-26), and 5,091 of
+  them have IL risk. So the loss is estimated from 30 days of prices, for pools that hold exactly
+  two tokens: it is the loss of a 50/50 constant-product pool and assumes that last month's
+  volatility continues. For concentrated-liquidity pools (Uniswap v3 and v4, Velodrome v3 and
+  similar) it is a **lower bound**. Pools with another number of tokens, pools whose tokens have no
+  prices, and offline runs without `--prices-file` stay `IL_UNKNOWN`, and their net APY is **too
+  optimistic**.
+- **Only the pools shown get an estimate.** Prices are looked up after the filters and the limit,
+  so that a run asks for a handful of tokens and not for thousands. A pool that loses money only
+  once its IL is counted can therefore be missing from a short list. Use a larger `--limit`.
 - **The data is DeFiLlama's.** If DeFiLlama's APY for a pool is wrong, stale or spiking, so is the
   result. Check the `APY_OUTLIER` flag, and look at the pool on DeFiLlama before you act.
 - **Costs are rough.** Gas units are the same for every transaction, the L1 data fee is a flat
@@ -274,6 +318,7 @@ mock fail, so a test cannot reach the network by accident.
 | --- | --- |
 | `src/defi_risk_tools/data.py` | Fetching with a timeout and one retry, and parsing into `Pool`. Bad entries are skipped and counted. |
 | `src/defi_risk_tools/costs.py` | The gas and fee table, and the lookups of gas and token prices. |
+| `src/defi_risk_tools/prices.py` | Token prices for the impermanent loss estimate: which pools qualify, fetching in batches, reading a saved response. |
 | `src/defi_risk_tools/model.py` | The model: pure functions, no I/O. |
 | `src/defi_risk_tools/report.py` | The text table, the JSON document and the static HTML page. |
 | `src/defi_risk_tools/cli.py` | The `yield-scan` command line. |

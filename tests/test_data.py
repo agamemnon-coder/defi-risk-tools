@@ -1,5 +1,6 @@
 """Fetching and parsing pools: null fields, bad entries, retries."""
 
+import dataclasses
 import json
 
 import httpx
@@ -127,6 +128,13 @@ def test_optional_fields_may_be_missing_or_null():
     assert pool.exposure == "multi"  # unknown exposure is treated as the costlier case
     assert pool.reward_tokens == ()
     assert pool.underlying_tokens == ()
+
+
+def test_a_parsed_pool_has_no_il_volatility_until_one_is_measured():
+    pool = parse_pool(raw_pool(ilRisk="yes"))
+
+    assert pool.il_volatility is None
+    assert dataclasses.replace(pool, il_volatility=0.5).il_volatility == 0.5
 
 
 def test_il_risk_is_true_only_for_yes():
@@ -265,6 +273,27 @@ def test_a_server_error_is_retried_too(http_mock):
 
     with data.make_client() as client:
         assert data.request_json(client, "GET", "https://example.test/x") == [1]
+
+
+@pytest.mark.parametrize("status", [408, 429, 500, 502, 503])
+def test_timeouts_rate_limits_and_server_errors_are_retried(http_mock, status):
+    route = http_mock.get("https://example.test/x")
+    route.side_effect = [httpx.Response(status), httpx.Response(200, json={"ok": True})]
+
+    with data.make_client() as client:
+        assert data.request_json(client, "GET", "https://example.test/x") == {"ok": True}
+
+    assert route.call_count == 2
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 422])
+def test_a_request_the_server_rejected_is_not_sent_again(http_mock, status):
+    route = http_mock.get("https://example.test/x").respond(status)
+
+    with data.make_client() as client, pytest.raises(DataError, match=f"HTTP {status}"):
+        data.request_json(client, "GET", "https://example.test/x")
+
+    assert route.call_count == 1  # asking again would only get the same answer
 
 
 def test_two_failures_in_a_row_give_up_with_a_clear_message(http_mock):

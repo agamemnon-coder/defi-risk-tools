@@ -33,6 +33,7 @@ def build_scan(make_pool):
             include_zero_apy=False,
             tx_costs=tx_costs,
             source="a test",
+            price_source="a prices test",
             analysed=len(results),
             cost_negative=sum(result.cost_negative for result in results),
             below_min_tvl=0,
@@ -129,16 +130,32 @@ def test_text_report_has_the_columns_in_the_design_order(build_scan, make_pool):
 
 def test_text_report_prints_assumptions_disclaimer_and_notes(build_scan, make_pool):
     text = report.render_text(build_scan([make_pool()], notes=["Something fell back."]))
+    flat = " ".join(text.split())  # long lines are wrapped, so compare without the line breaks
 
-    assert "Estimates only, not financial advice" in text
-    assert "Position size" in text
-    assert "$1,000" in text
-    assert "30 days" in text
-    assert "50% of the reward APY is assumed lost" in text
-    assert "0.30% each way" in text
-    assert "capped at 50% of the position" in text
-    assert "Cost of one transaction" in text
-    assert "Something fell back." in text
+    assert "Estimates only, not financial advice" in flat
+    assert "Position size" in flat
+    assert "$1,000" in flat
+    assert "30 days" in flat
+    assert "50% of the reward APY is assumed lost" in flat
+    assert "0.30% each way" in flat
+    assert "volatility^2 x T/365 / 8 of the position" in flat
+    assert "Capped at 50% of the position" in flat
+    assert "Cost of one transaction" in flat
+    assert "Something fell back." in flat
+
+
+def test_long_lines_under_the_table_wrap_with_a_hanging_indent(build_scan, make_pool):
+    text = report.render_text(build_scan([make_pool()], notes=["word " * 60]))
+    lines = text.splitlines()
+
+    start = lines.index("Assumptions")
+    section = lines[start : lines.index("Cost of one transaction")]
+    assert all(len(line) <= report.TEXT_WIDTH for line in section)
+    impermanent = next(i for i, line in enumerate(section) if "Impermanent loss" in line)
+    assert section[impermanent + 1].startswith(" " * 20)  # the text continues under the text
+    notes = lines[lines.index("Notes") + 1 : -3]
+    assert len(notes) > 1
+    assert all(line.startswith("  ") and len(line) <= report.TEXT_WIDTH for line in notes)
 
 
 def test_text_report_without_rows_says_so(build_scan):
@@ -181,7 +198,8 @@ def test_json_document_holds_assumptions_costs_counts_and_pools(build_scan, make
     assert set(pool) == {
         "pool", "chain", "project", "symbol", "tvl_usd", "apy", "apy_base", "apy_reward",
         "gross_usd", "gas_usd", "swap_usd", "il_usd", "costs_usd", "net_usd", "net_apy",
-        "break_even_size_usd", "break_even_days", "flags", "reward_tokens", "underlying_tokens",
+        "break_even_size_usd", "break_even_days", "il_volatility", "flags", "reward_tokens",
+        "underlying_tokens",
     }  # fmt: skip
 
 
@@ -198,8 +216,8 @@ def test_json_leaves_gas_fields_empty_on_a_fixed_fee_chain(make_pool):
     tx_costs, _ = resolve_tx_costs(["Solana"], client=None)
     scan = Scan(
         rows=[], assumptions=Assumptions(), min_tvl_usd=0.0, include_zero_apy=True,
-        tx_costs=tx_costs, source="t", analysed=0, cost_negative=0, below_min_tvl=0,
-        zero_apy=0, skipped_entries=0, notes=[],
+        tx_costs=tx_costs, source="t", price_source="p", analysed=0, cost_negative=0,
+        below_min_tvl=0, zero_apy=0, skipped_entries=0, notes=[],
     )  # fmt: skip
 
     solana = json.loads(report.render_json(scan))["chain_costs"]["Solana"]
@@ -297,3 +315,60 @@ def test_html_cost_negative_rows_are_marked(build_scan, make_pool):
 
 def test_html_without_rows_says_so(build_scan):
     assert "No pools match." in report.render_html(build_scan([]), date(2026, 10, 26))
+
+
+# Impermanent loss that was estimated from prices
+
+
+@pytest.fixture
+def mixed_il_scan(build_scan, make_pool):
+    """One pool whose IL was estimated, one with IL risk and no figure, one without IL risk."""
+    lp = {"stablecoin": False, "exposure": "multi", "il_risk": True}
+    estimated = make_pool(pool_id="estimated", il_volatility=0.4, **lp)
+    unknown = make_pool(pool_id="unknown", **lp)
+    plain = make_pool(pool_id="plain")
+    return build_scan([estimated, unknown, plain])
+
+
+def test_the_il_coverage_counts_what_was_estimated_among_the_pools_with_il_risk(mixed_il_scan):
+    assert report.il_coverage(mixed_il_scan) == (2, 1, 1)  # at risk, estimated, unknown
+
+
+def test_the_text_report_says_how_many_pools_have_an_estimated_il(mixed_il_scan):
+    text = report.render_text(mixed_il_scan)
+
+    assert "Impermanent loss: estimated from token prices for 1 of the 2 pools shown" in text
+    assert "Prices: a prices test" in text
+
+
+def test_the_il_line_is_left_out_when_no_pool_shown_has_il_risk(build_scan, make_pool):
+    assert "Impermanent loss: estimated" not in report.render_text(build_scan([make_pool()]))
+
+
+def test_json_counts_the_estimates_and_gives_each_pool_its_volatility(mixed_il_scan):
+    document = json.loads(report.render_json(mixed_il_scan))
+
+    assert document["price_source"] == "a prices test"
+    assert document["counts"]["il_estimated"] == 1
+    assert document["counts"]["il_unknown"] == 1
+    volatilities = {pool["pool"]: pool["il_volatility"] for pool in document["pools"]}
+    assert volatilities == {"estimated": 0.4, "unknown": None, "plain": None}
+
+
+def test_html_labels_an_estimated_il_as_an_estimate(mixed_il_scan):
+    page = report.render_html(mixed_il_scan, date(2026, 10, 26))
+
+    assert page.count("IL est.") == 1  # only the pool that has one
+    assert "IL_ESTIMATED" in page
+    assert "a lower bound if concentrated" in page  # the legend explains the flag
+    assert "Prices: a prices test" in page
+
+
+def test_the_limitations_say_what_the_estimate_is_and_is_not():
+    text = " ".join(report.LIMITATIONS)
+
+    assert "estimated, not measured" in text
+    assert "50/50 constant-product pool" in text
+    assert "lower bound" in text
+    assert "Uniswap v3 and v4, Velodrome v3" in text
+    assert "only looked up for the pools shown" in text

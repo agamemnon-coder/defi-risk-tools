@@ -7,6 +7,7 @@ withdrawn costs $0.30 in gas. A 36.5% APY pays exactly $1.00 a day on $1,000.
 import dataclasses
 
 import pytest
+from price_tools import DAY, daily, prices_with_returns
 
 from defi_risk_tools import model
 from defi_risk_tools.data import parse_pools
@@ -357,6 +358,197 @@ def test_ranking_does_not_depend_on_the_input_order(make_pool):
     backwards = [r.pool.pool_id for r in model.rank(results[::-1])]
 
     assert forwards == backwards
+
+
+# Impermanent loss estimated from price volatility
+
+PLUS_MINUS_ONE_PERCENT = [0.01, -0.01] * 10  # 20 daily log returns of +1% and -1%
+
+
+def test_volatility_of_returns_that_alternate_by_one_percent_is_worked_out_by_hand():
+    token = daily(prices_with_returns(PLUS_MINUS_ONE_PERCENT))
+    stable = daily([1.0] * 21)
+
+    # The mean is 0 and the sample variance is 20 * 0.01**2 / 19, so the annualised volatility
+    # is 0.01 * sqrt(365 * 20 / 19) = 0.196013.
+    assert model.ratio_volatility(token, stable) == pytest.approx(0.196013, abs=1e-6)
+
+
+def test_the_volatility_of_the_ratio_does_not_depend_on_which_token_is_first():
+    token = daily(prices_with_returns(PLUS_MINUS_ONE_PERCENT))
+    stable = daily([1.0] * 21)
+
+    assert model.ratio_volatility(stable, token) == pytest.approx(
+        model.ratio_volatility(token, stable)
+    )
+
+
+def test_two_tokens_that_move_together_have_no_volatility_between_them():
+    token = daily(prices_with_returns(PLUS_MINUS_ONE_PERCENT))
+    twin = daily([price * 3 for price in prices_with_returns(PLUS_MINUS_ONE_PERCENT)])
+
+    assert model.ratio_volatility(token, twin) == pytest.approx(0.0, abs=1e-12)
+
+
+def test_tokens_that_move_in_opposite_directions_double_the_volatility():
+    up_down = daily(prices_with_returns(PLUS_MINUS_ONE_PERCENT))
+    down_up = daily(prices_with_returns([-r for r in PLUS_MINUS_ONE_PERCENT]))
+
+    # The log ratio moves by +-2% a day: 0.02 * sqrt(365 * 20 / 19) = 0.392026
+    assert model.ratio_volatility(up_down, down_up) == pytest.approx(0.392026, abs=1e-6)
+
+
+def test_timestamps_that_differ_by_minutes_still_pair_up():
+    prices_a = prices_with_returns(PLUS_MINUS_ONE_PERCENT)
+    jittered_a = daily(prices_a, offsets=[(i % 5) * 600 for i in range(21)])
+    jittered_b = daily([1.0] * 21, offsets=[-(i % 3) * 900 for i in range(21)])
+
+    assert model.ratio_volatility(jittered_a, jittered_b) == pytest.approx(0.196013, abs=1e-6)
+
+
+def test_a_missing_day_is_a_gap_and_not_a_two_day_return():
+    prices = prices_with_returns(PLUS_MINUS_ONE_PERCENT)
+    without_day_ten = daily(prices)[:10] + daily(prices)[11:]
+    stable = daily([1.0] * 21)
+
+    # 18 one-day returns are left, 9 of +1% and 9 of -1%: 0.01 * sqrt(365 * 18 / 17) = 0.196589.
+    # Counting the jump over the gap as a return would give 0.191050 instead.
+    assert model.ratio_volatility(without_day_ten, stable) == pytest.approx(0.196589, abs=1e-6)
+
+
+def test_a_price_of_zero_is_skipped_like_a_gap():
+    prices = prices_with_returns(PLUS_MINUS_ONE_PERCENT)
+    prices[10] = 0.0
+
+    assert model.ratio_volatility(daily(prices), daily([1.0] * 21)) == pytest.approx(
+        0.196589, abs=1e-6
+    )
+
+
+def test_prices_may_come_in_any_order():
+    token = daily(prices_with_returns(PLUS_MINUS_ONE_PERCENT))
+
+    assert model.ratio_volatility(token[::-1], daily([1.0] * 21)[::-1]) == pytest.approx(
+        0.196013, abs=1e-6
+    )
+
+
+def test_fourteen_daily_returns_are_enough_and_thirteen_are_not():
+    stable = daily([1.0] * 15)
+
+    fourteen = daily(prices_with_returns([0.01, -0.01] * 7))  # 15 prices, 14 returns
+    thirteen = daily(prices_with_returns([0.01, -0.01] * 6 + [0.01]))[:14]  # 13 returns
+
+    assert model.ratio_volatility(fourteen, stable) is not None
+    assert model.ratio_volatility(thirteen, stable[:14]) is None
+
+
+def test_prices_that_do_not_overlap_in_time_give_no_volatility():
+    token = daily(prices_with_returns(PLUS_MINUS_ONE_PERCENT))
+    much_later = [(time + 100 * DAY, price) for time, price in daily([1.0] * 21)]
+
+    assert model.ratio_volatility(token, much_later) is None
+    assert model.ratio_volatility(token, []) is None
+    assert model.ratio_volatility([], token) is None
+
+
+def test_the_expected_il_is_the_variance_over_eight_for_the_holding_period(make_pool):
+    pool = make_pool(stablecoin=False, exposure="multi", il_risk=True, il_volatility=0.8)
+
+    # 73 days is 0.2 of a year: $1,000 * 0.8**2 * 0.2 / 8 = $16.00
+    assert model.impermanent_loss_usd(pool, 1000.0, 73, Assumptions()) == pytest.approx(16.0)
+
+
+def test_the_il_of_the_sample_returns_worked_out_by_hand(make_pool):
+    token = daily(prices_with_returns(PLUS_MINUS_ONE_PERCENT))
+    volatility = model.ratio_volatility(token, daily([1.0] * 21))
+    pool = make_pool(il_risk=True, il_volatility=volatility)
+
+    # sigma**2 * T/365 / 8 of $1,000 for 30 days: (0.01**2 * 365 * 20/19) * (30/365) / 8 * 1000
+    # = 0.0001 * 600 / 19 / 8 * 1000 = 7.5 / 19 = $0.394737
+    assert model.impermanent_loss_usd(pool, 1000.0, 30, Assumptions()) == pytest.approx(7.5 / 19)
+
+
+def test_the_estimated_il_is_capped_at_half_the_position(make_pool):
+    pool = make_pool(il_risk=True, il_volatility=8.0)  # uncapped: 1000 * 64 * 0.2 / 8 = $1,600
+
+    assert model.impermanent_loss_usd(pool, 1000.0, 73, Assumptions()) == pytest.approx(500.0)
+
+
+def test_a_figure_from_defillama_wins_over_an_estimate(make_pool):
+    pool = make_pool(il_risk=True, il_7d=-0.5, il_volatility=0.8)
+
+    assert model.impermanent_loss_usd(pool, 1000.0, 28, Assumptions()) == pytest.approx(20.0)
+    flags = model.flags_for(pool, net_usd=1.0)
+    assert model.IL_ESTIMATED not in flags
+    assert model.IL_UNKNOWN not in flags
+
+
+def test_a_volatility_does_nothing_for_a_pool_without_il_risk(make_pool):
+    pool = make_pool(il_risk=False, il_volatility=0.8)
+
+    assert model.impermanent_loss_usd(pool, 1000.0, 73, Assumptions()) == 0
+    assert model.flags_for(pool, net_usd=1.0) == ()
+
+
+def test_estimated_il_flows_through_the_whole_evaluation(make_pool):
+    pool = make_pool(
+        stablecoin=False,
+        exposure="multi",
+        apy_base=50.0,
+        apy_mean_30d=50.0,
+        il_risk=True,
+        il_volatility=0.8,
+    )
+
+    result = evaluate_pool(pool, Assumptions(days=73), TX)
+
+    assert result.gross_usd == pytest.approx(100.0)  # $1,000 * 50% * 0.2
+    assert result.gas_usd == pytest.approx(0.30)
+    assert result.swap_usd == pytest.approx(6.0)
+    assert result.il_usd == pytest.approx(16.0)
+    assert result.net_usd == pytest.approx(77.7)
+    assert result.flags == (model.IL_RISK, model.IL_ESTIMATED)
+    # per dollar: 0.5 * 0.2 - 0.006 - 0.016 = 0.078, so gas 0.30 / 0.078
+    assert result.break_even_size_usd == pytest.approx(0.30 / 0.078)
+    # net(T) = T * (1000 * 0.5 - 1000 * 0.64 / 8) / 365 - 6.30 = 1.150685 T - 6.30:
+    # -0.547 at T = 5 and +0.604 at T = 6
+    assert result.break_even_days == 6
+
+
+def test_estimated_il_can_turn_a_pool_cost_negative(make_pool):
+    # 8% for 30 days pays $6.58 against $6.30 of gas and swaps: +$0.28 before impermanent loss.
+    pool = make_pool(stablecoin=False, exposure="multi", apy_base=8.0, il_risk=True)
+
+    before = evaluate_pool(pool, Assumptions(), TX)
+    after = evaluate_pool(dataclasses.replace(pool, il_volatility=0.4), Assumptions(), TX)
+
+    assert not before.cost_negative
+    assert model.IL_UNKNOWN in before.flags
+    assert after.il_usd == pytest.approx(1000 * 0.4**2 * (30 / 365) / 8)  # $1.64
+    assert after.cost_negative
+    assert model.IL_ESTIMATED in after.flags
+    assert model.IL_UNKNOWN not in after.flags
+
+
+def test_il_estimated_takes_the_place_of_il_unknown_in_the_flag_order(make_pool):
+    pool = make_pool(
+        apy_base=1.0,
+        apy_reward=5.0,
+        apy_mean_30d=1.0,
+        tvl_usd=10.0,
+        il_risk=True,
+        il_volatility=0.3,
+    )
+
+    assert model.flags_for(pool, net_usd=-1.0) == (
+        model.COST_NEGATIVE,
+        model.REWARD_DEPENDENT,
+        model.APY_OUTLIER,
+        model.LOW_TVL,
+        model.IL_RISK,
+        model.IL_ESTIMATED,
+    )
 
 
 # The cheap filters

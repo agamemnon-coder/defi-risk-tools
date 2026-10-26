@@ -1,6 +1,7 @@
 """Rendering a scan: the text table, the JSON document and the static HTML page."""
 
 import json
+import textwrap
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import date
@@ -13,6 +14,9 @@ from defi_risk_tools.model import (
     BREAK_EVEN_MAX_DAYS,
     COST_NEGATIVE,
     FLAG_DESCRIPTIONS,
+    IL_ESTIMATED,
+    IL_RISK,
+    IL_UNKNOWN,
     Assumptions,
     PoolResult,
 )
@@ -31,9 +35,15 @@ LIMITATIONS = (
     "financial advice.",
     "The pool data comes from DeFiLlama and is only as good as what protocols and DeFiLlama "
     "report. APYs change every day.",
-    "Impermanent loss is only counted when DeFiLlama gives a 7-day figure (il7d). That field was "
-    "empty for every pool on these chains when this tool was written, so pools with IL risk are "
-    "flagged IL_UNKNOWN and their net APY is optimistic.",
+    "Impermanent loss is estimated, not measured. DeFiLlama's own 7-day figure (il7d) was empty "
+    "for every pool when this tool was written, so for pools with IL risk and exactly two tokens "
+    "it is estimated from 30 days of daily prices: volatility squared times T/365 over 8, the "
+    "small-move result for a 50/50 constant-product pool. For concentrated-liquidity pools "
+    "(Uniswap v3 and v4, Velodrome v3 and similar) it is a lower bound. Pools with another "
+    "number of tokens, or without prices, stay IL_UNKNOWN and their net APY is optimistic.",
+    "Prices are only looked up for the pools shown (after the filters and the limit), so a pool "
+    "that loses money only once impermanent loss is counted can be missing from a short list. "
+    "A larger limit widens it.",
     "Gas and L1 data fees are rough estimates. Swap cost is a flat rate, not a price-impact model.",
     "The reward haircut is a rule of thumb, not a forecast of any token's price.",
     "Smart contract risk, depegs, taxes, bridge costs and withdrawal limits are not modelled.",
@@ -50,6 +60,7 @@ class Scan:
     include_zero_apy: bool
     tx_costs: dict[str, TxCost]  # one entry per scanned chain
     source: str
+    price_source: str  # where token prices for impermanent loss came from, or that there were none
     analysed: int  # pools the model ran on: scanned chains, at or above the TVL floor
     cost_negative: int  # how many of those are cost-negative
     below_min_tvl: int  # pools on the scanned chains that were left out for low TVL
@@ -124,8 +135,11 @@ def assumption_rows(scan: Scan) -> list[tuple[str, str]]:
         ),
         (
             "Impermanent loss",
-            f"7-day IL scaled to the holding period and capped at {a.il_cap:.0%} of the "
-            "position; not counted when DeFiLlama gives no figure",
+            "DeFiLlama's 7-day figure if there is one. Otherwise, for pools with two tokens, "
+            f"volatility^2 x T/365 / 8 of the position, from 30 days of daily prices (a 50/50 "
+            "constant-product pool; a lower bound for concentrated liquidity). Capped at "
+            f"{a.il_cap:.0%} of the position, and not counted when neither exists. Prices are "
+            "looked up only for the pools shown.",
         ),
         ("TVL floor", f"pools under {format_plain_money(scan.min_tvl_usd)} are left out"),
         (
@@ -137,13 +151,31 @@ def assumption_rows(scan: Scan) -> list[tuple[str, str]]:
     ]
 
 
+def il_coverage(scan: Scan) -> tuple[int, int, int]:
+    """Of the pools shown: how many have IL risk, how many of those were estimated and how many
+    have no figure at all."""
+    flags = [result.flags for result in scan.rows]
+    return (
+        sum(IL_RISK in f for f in flags),
+        sum(IL_ESTIMATED in f for f in flags),
+        sum(IL_UNKNOWN in f for f in flags),
+    )
+
+
 def counts_lines(scan: Scan) -> list[str]:
-    return [
+    lines = [
         f"Pools analysed: {scan.analysed} on {', '.join(scan.tx_costs)}. "
         f"Cost-negative: {scan.cost_negative}. Shown: {len(scan.rows)}.",
         f"Left out: {scan.below_min_tvl} under the TVL floor, {scan.zero_apy} advertising an APY "
         f"of 0 or less, {scan.skipped_entries} unreadable entries in the source.",
     ]
+    at_risk, estimated, _ = il_coverage(scan)
+    if at_risk:
+        lines.append(
+            f"Impermanent loss: estimated from token prices for {estimated} of the {at_risk} "
+            "pools shown with IL risk."
+        )
+    return lines
 
 
 def format_days(days: int) -> str:
@@ -164,19 +196,33 @@ TEXT_HEADER = (
     "flags",
 )
 TEXT_RIGHT_ALIGNED = {3, 4, 5, 6, 7}
+TEXT_WIDTH = 100  # long lines under the table wrap here
 
 
 def render_text(scan: Scan) -> str:
     lines = ["Cost-Negative Yield Scanner  -  estimates only, not financial advice", ""]
     lines.append(_text_table(scan.rows) if scan.rows else "No pools match.")
-    lines += ["", *counts_lines(scan), f"Source: {scan.source}", SORT_NOTE, "", "Assumptions"]
-    lines += [f"  {label:<18}{text}" for label, text in assumption_rows(scan)]
+    lines += ["", *counts_lines(scan), f"Source: {scan.source}", f"Prices: {scan.price_source}"]
+    lines += [SORT_NOTE, "", "Assumptions"]
+    for label, text in assumption_rows(scan):
+        lines += _hanging(label, text, 18)
     lines += ["", "Cost of one transaction"]
-    lines += [f"  {chain:<12}{tx_cost.describe()}" for chain, tx_cost in scan.tx_costs.items()]
+    for chain, tx_cost in scan.tx_costs.items():
+        lines += _hanging(chain, tx_cost.describe(), 12)
     if scan.notes:
-        lines += ["", "Notes"] + [f"  {note}" for note in scan.notes]
+        lines += ["", "Notes"]
+        for note in scan.notes:
+            lines += _hanging("", note, 0)
     lines += ["", DISCLAIMER, "See the README for the model and its limits."]
     return "\n".join(lines)
+
+
+def _hanging(label: str, text: str, label_width: int) -> list[str]:
+    """`  label  text`, with the text wrapped at 100 columns under its own first line."""
+    indent = " " * (2 + label_width)
+    wrapped = textwrap.wrap(text, width=TEXT_WIDTH - len(indent)) or [""]
+    first = f"  {label:<{label_width}}{wrapped[0]}"
+    return [first, *(indent + line for line in wrapped[1:])]
 
 
 def _text_table(rows: list[PoolResult]) -> str:
@@ -218,6 +264,7 @@ def render_json(scan: Scan) -> str:
         "version": __version__,
         "disclaimer": DISCLAIMER,
         "source": scan.source,
+        "price_source": scan.price_source,
         "assumptions": {
             **asdict(scan.assumptions),
             "min_tvl_usd": scan.min_tvl_usd,
@@ -231,6 +278,8 @@ def render_json(scan: Scan) -> str:
             "below_min_tvl": scan.below_min_tvl,
             "zero_apy": scan.zero_apy,
             "skipped_entries": scan.skipped_entries,
+            "il_estimated": il_coverage(scan)[1],
+            "il_unknown": il_coverage(scan)[2],
         },
         "notes": scan.notes,
         "pools": [_pool_record(result) for result in scan.rows],
@@ -274,6 +323,7 @@ def _pool_record(result: PoolResult) -> dict:
         "net_apy": round(result.net_apy, 6),
         "break_even_size_usd": _round_or_none(result.break_even_size_usd),
         "break_even_days": result.break_even_days,
+        "il_volatility": _round_or_none(pool.il_volatility),
         "flags": list(result.flags),
         "reward_tokens": list(pool.reward_tokens),
         "underlying_tokens": list(pool.underlying_tokens),
@@ -391,7 +441,8 @@ fall of reward tokens and impermanent loss.</p>
 </main>
 <footer>
 <p>Generated by yield-scan {escape(__version__)} on {generated_on.isoformat()}.
-Source: {escape(scan.source)}. Pool links go to DeFiLlama.</p>
+Source: {escape(scan.source)}. Prices: {escape(scan.price_source)}.
+Pool links go to DeFiLlama.</p>
 </footer>
 </div>
 </body>
@@ -421,9 +472,10 @@ def _html_row(result: PoolResult, a: Assumptions) -> str:
     link = DEFILLAMA_POOL_URL + quote(pool.pool_id, safe="")
     net_class = "neg" if result.net_usd < 0 else "pos"
     row_class = ' class="cost-negative"' if result.cost_negative else ""
+    il_label = "IL est." if IL_ESTIMATED in result.flags else "IL"
     breakdown = (
         f"gas {format_money(result.gas_usd)}, swaps {format_money(result.swap_usd)}, "
-        f"IL {format_money(result.il_usd)}"
+        f"{il_label} {format_money(result.il_usd)}"
     )
     net_note = f"{format_money(result.net_usd)} over {format_days(a.days)}"
     days_note = f"{format_break_even_days(result, a)} at {format_plain_money(a.size_usd)}"

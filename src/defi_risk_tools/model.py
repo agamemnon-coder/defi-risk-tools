@@ -5,12 +5,19 @@ simple (not compounded) and the APY is assumed to stay constant over the holding
 """
 
 import math
+import statistics
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from defi_risk_tools.data import Pool
 
 DAYS_PER_YEAR = 365
+SECONDS_PER_DAY = 86_400
 IL_WINDOW_DAYS = 7  # DeFiLlama's `il7d` is the impermanent loss over 7 days
+IL_VARIANCE_DIVISOR = 8  # expected IL = variance of the log price ratio / 8, for small moves
+MIN_RETURNS = 14  # fewer daily returns than this is too little history to measure a volatility
+
+PriceSeries = Sequence[tuple[float, float]]  # (unix timestamp, USD price), daily
 
 # The flags, in the order they are shown.
 COST_NEGATIVE = "COST_NEGATIVE"
@@ -18,6 +25,7 @@ REWARD_DEPENDENT = "REWARD_DEPENDENT"
 APY_OUTLIER = "APY_OUTLIER"
 LOW_TVL = "LOW_TVL"
 IL_RISK = "IL_RISK"
+IL_ESTIMATED = "IL_ESTIMATED"
 IL_UNKNOWN = "IL_UNKNOWN"
 
 LOW_TVL_USD = 100_000.0
@@ -31,6 +39,7 @@ FLAG_DESCRIPTIONS = {
     APY_OUTLIER: "DeFiLlama marks the APY as an outlier, or it is over 3x its 30-day mean.",
     LOW_TVL: "Less than $100,000 is deposited in the pool.",
     IL_RISK: "DeFiLlama says the pool carries impermanent loss risk.",
+    IL_ESTIMATED: "IL is estimated from 30 days of token prices (a lower bound if concentrated).",
     IL_UNKNOWN: "Impermanent loss risk, but no 7-day figure exists, so no IL cost is counted.",
 }
 
@@ -113,11 +122,58 @@ def swap_cost_usd(pool: Pool, size_usd: float, a: Assumptions) -> float:
 
 
 def impermanent_loss_usd(pool: Pool, size_usd: float, days: int, a: Assumptions) -> float:
-    """The 7-day IL scaled to the holding period and capped. Zero when it is not known."""
-    if not pool.il_risk or pool.il_7d is None:
+    """Impermanent loss over the holding period, capped. Zero when it is not known.
+
+    DeFiLlama's 7-day figure is used if the pool has one. Otherwise, if the volatility of the
+    pool's price ratio was measured, the expected loss is `volatility² × T/365 / 8` of the position.
+    """
+    if not pool.il_risk:
         return 0.0
-    loss = size_usd * abs(pool.il_7d) / 100 * days / IL_WINDOW_DAYS
+    if pool.il_7d is not None:
+        loss = size_usd * abs(pool.il_7d) / 100 * days / IL_WINDOW_DAYS
+    elif pool.il_volatility is not None:
+        years = days / DAYS_PER_YEAR
+        loss = size_usd * pool.il_volatility**2 * years / IL_VARIANCE_DIVISOR
+    else:
+        return 0.0
     return min(loss, a.il_cap * size_usd)
+
+
+def ratio_volatility(prices_a: PriceSeries, prices_b: PriceSeries) -> float | None:
+    """Annualised volatility of the daily log returns of the price ratio A / B.
+
+    Each price of A is paired with the nearest price of B, if that is within half a day: the two
+    series come from separate lookups, so their timestamps differ by minutes or hours. A return
+    is the change between two pairs one day apart, so a gap in the data is never counted as a
+    one-day return. Returns None when there are fewer than `MIN_RETURNS` returns.
+    """
+    pairs = _paired_log_ratios(prices_a, prices_b)
+    returns = [
+        later - earlier
+        for (time_before, earlier), (time_after, later) in zip(pairs, pairs[1:], strict=False)
+        if SECONDS_PER_DAY / 2 <= time_after - time_before <= SECONDS_PER_DAY * 3 / 2
+    ]
+    if len(returns) < MIN_RETURNS:
+        return None
+    return statistics.stdev(returns) * math.sqrt(DAYS_PER_YEAR)
+
+
+def _paired_log_ratios(prices_a: PriceSeries, prices_b: PriceSeries) -> list[tuple[float, float]]:
+    """(time, ln(A / B)) for each price of A that has a price of B within half a day."""
+    prices_a, prices_b = sorted(prices_a), sorted(prices_b)
+    if not prices_b:
+        return []
+    pairs = []
+    nearest = 0  # index in B; it only moves forward, because A is in time order too
+    for time_a, price_a in prices_a:
+        while nearest + 1 < len(prices_b):
+            if abs(prices_b[nearest + 1][0] - time_a) > abs(prices_b[nearest][0] - time_a):
+                break
+            nearest += 1
+        time_b, price_b = prices_b[nearest]
+        if abs(time_b - time_a) <= SECONDS_PER_DAY / 2 and price_a > 0 and price_b > 0:
+            pairs.append((time_a, math.log(price_a / price_b)))
+    return pairs
 
 
 def net_yield_usd(
@@ -173,7 +229,7 @@ def flags_for(pool: Pool, net_usd: float) -> tuple[str, ...]:
     if pool.il_risk:
         flags.append(IL_RISK)
         if pool.il_7d is None:
-            flags.append(IL_UNKNOWN)
+            flags.append(IL_UNKNOWN if pool.il_volatility is None else IL_ESTIMATED)
     return tuple(flags)
 
 

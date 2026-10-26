@@ -46,6 +46,10 @@ class Pool:
     outlier: bool
     reward_tokens: tuple[str, ...]
     underlying_tokens: tuple[str, ...]
+    # Not part of DeFiLlama's response: the annualised volatility of the price ratio of the pool's
+    # two tokens, measured from daily prices. Filled in by the impermanent-loss estimate (see
+    # `prices.estimate_volatilities`); None when it was not or could not be measured.
+    il_volatility: float | None = None
 
 
 @dataclass(frozen=True)
@@ -63,7 +67,11 @@ def make_client() -> httpx.Client:
 
 
 def request_json(client: httpx.Client, method: str, url: str, **kwargs: Any) -> Any:
-    """Send a request and return its decoded JSON body. Tries once more if the first try fails."""
+    """Send a request and return its decoded JSON body. Tries once more if the first try fails.
+
+    A request that the server rejected (a 4xx, other than a timeout or a rate limit) is not tried
+    again: the same request would be rejected the same way.
+    """
     last_error: Exception
     for _ in range(ATTEMPTS):
         try:
@@ -72,7 +80,16 @@ def request_json(client: httpx.Client, method: str, url: str, **kwargs: Any) -> 
             return response.json()
         except (httpx.HTTPError, ValueError) as error:
             last_error = error
+            if not _worth_retrying(error):
+                break
     raise DataError(f"{method} {url} failed ({describe_error(last_error)})") from last_error
+
+
+def _worth_retrying(error: Exception) -> bool:
+    if isinstance(error, httpx.HTTPStatusError):
+        status = error.response.status_code
+        return status >= 500 or status in (408, 429)
+    return True
 
 
 def describe_error(error: Exception) -> str:
