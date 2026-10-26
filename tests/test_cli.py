@@ -239,17 +239,24 @@ def test_json_output_is_pure_json_with_the_documented_shape(sample, sample_paylo
 def test_json_puts_cost_negative_pools_first_by_advertised_apy_then_the_rest_by_net_apy(sample):
     pools = scan_json(*sample, "--limit", "100")["pools"]
 
+    def outlier(pool: dict) -> bool:
+        return "APY_OUTLIER" in pool["flags"]
+
     negative = [pool for pool in pools if "COST_NEGATIVE" in pool["flags"]]
     rest = [pool for pool in pools if "COST_NEGATIVE" not in pool["flags"]]
     assert negative
     assert rest
+    assert any(outlier(pool) for pool in negative)  # so the outlier rule below is exercised
     assert pools == negative + rest
-    assert [pool["apy"] for pool in negative] == sorted(
-        (pool["apy"] for pool in negative), reverse=True
-    )
-    assert [pool["net_apy"] for pool in rest] == sorted(
-        (pool["net_apy"] for pool in rest), reverse=True
-    )
+    for group, metric in ((negative, "apy"), (rest, "net_apy")):
+        # In each group the pools with an outlier APY come last, and each part is sorted.
+        trusted = [pool for pool in group if not outlier(pool)]
+        outliers = [pool for pool in group if outlier(pool)]
+        assert group == trusted + outliers
+        for part in (trusted, outliers):
+            assert [pool[metric] for pool in part] == sorted(
+                (pool[metric] for pool in part), reverse=True
+            )
 
 
 def test_the_most_misleading_pools_of_the_sample_lead(sample):
@@ -288,8 +295,13 @@ def test_include_zero_apy_brings_them_back(sample, sample_payload):
     assert document["counts"]["analysed"] == 61
     assert document["counts"]["zero_apy"] == 0
     assert document["assumptions"]["include_zero_apy"] is True
-    # They advertise the least, so they come last among the cost-negative pools.
-    negative = [pool for pool in pools if "COST_NEGATIVE" in pool["flags"]]
+    # They advertise the least, so they come last among the cost-negative pools whose APY is not an
+    # outlier (the pools with an APY_OUTLIER come after those).
+    negative = [
+        pool
+        for pool in pools
+        if "COST_NEGATIVE" in pool["flags"] and "APY_OUTLIER" not in pool["flags"]
+    ]
     assert {pool["pool"] for pool in negative[-len(zero) :]} == zero
 
 

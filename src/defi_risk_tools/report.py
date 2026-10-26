@@ -26,7 +26,8 @@ DISCLAIMER = (
 DEFILLAMA_POOL_URL = "https://defillama.com/yields/pool/"
 SORT_NOTE = (
     "Sorted with cost-negative pools first, the highest advertised APY leading, "
-    "then the other pools by net APY, highest first."
+    "then the other pools by net APY, highest first. In each group, pools with an APY_OUTLIER "
+    "come last."
 )
 
 LIMITATIONS = (

@@ -289,13 +289,16 @@ def rank(results: list[PoolResult]) -> list[PoolResult]:
     """Put the most misleading pools first.
 
     Cost-negative pools lead, and among them the ones that advertise the highest APY: they look
-    the best and lose money. The other pools follow, by net APY, highest first. Ties are broken the
-    same way every time, so the same data always gives the same order.
+    the best and lose money. The other pools follow, by net APY, highest first. In each group the
+    pools whose APY is an outlier (`APY_OUTLIER`) come last: their APY is not to be trusted, so it
+    should not decide what leads. Ties are broken the same way every time, so the same data always
+    gives the same order.
     """
 
     def key(result: PoolResult) -> tuple:
         pool = result.pool
-        order = (0, -pool.apy) if result.cost_negative else (1, -result.net_apy)
+        outlier = APY_OUTLIER in result.flags
+        order = (0, outlier, -pool.apy) if result.cost_negative else (1, outlier, -result.net_apy)
         return (*order, -pool.tvl_usd, pool.chain, pool.project, pool.symbol, pool.pool_id)
 
     return sorted(results, key=key)

@@ -369,6 +369,24 @@ def test_cost_negative_pools_come_before_better_looking_ones_that_do_not_lose(ma
     assert [r.pool.pool_id for r in model.rank([wins, loses])] == ["loses", "wins"]
 
 
+def test_pools_with_an_outlier_apy_come_last_in_each_group(make_pool):
+    # The outliers advertise more, but their APY is not to be trusted, so they do not lead.
+    multi = {"exposure": "multi"}
+    loses_outlier = evaluate_pool(
+        make_pool(pool_id="loses-outlier", apy_base=3.5, outlier=True, **multi), Assumptions(), TX
+    )
+    loses = evaluate_pool(make_pool(pool_id="loses", apy_base=2.0, **multi), Assumptions(), TX)
+    wins_outlier = evaluate_pool(
+        make_pool(pool_id="wins-outlier", apy_base=90.0, outlier=True), Assumptions(), TX
+    )
+    wins = evaluate_pool(make_pool(pool_id="wins", apy_base=8.0), Assumptions(), TX)
+
+    ranked = model.rank([wins_outlier, wins, loses_outlier, loses])
+
+    assert [r.pool.pool_id for r in ranked] == ["loses", "loses-outlier", "wins", "wins-outlier"]
+    assert [model.APY_OUTLIER in r.flags for r in ranked] == [False, True, False, True]
+
+
 def test_equal_pools_are_ordered_by_tvl_then_by_name(make_pool):
     pools = [
         make_pool(pool_id="small", tvl_usd=1e6, symbol="AAA"),

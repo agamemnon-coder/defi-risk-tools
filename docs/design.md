@@ -194,3 +194,9 @@ For each pool:
    keyed by chain, with `cost_negative_share` from 0 to 1 and `null` when nothing was analysed)
    and in the HTML page, above the table of pools. The pages workflow keeps its command,
    `report --out site/index.html --limit 100`.
+3. **Outliers last.** With impermanent loss estimated for every pool, the top of the live page
+   filled with pools that advertise a huge APY and lose it to IL: on 2026-10-26, 58 of the first
+   100 rows were flagged `APY_OUTLIER`. Their APY is not to be trusted, and their volatility is
+   where the small-move IL formula is least reliable. So in each group (cost-negative, then the
+   rest) the pools flagged `APY_OUTLIER` now come after the others, in the same order among
+   themselves. They are still counted and still shown.

@@ -55,9 +55,9 @@ Base        aerodrome-v1  VVV-DIEM          $9.0M          0.00+0.80  $3.09    -
 Base        uniswap-v3    JITOSOL-CBBTC    $14.0M          0.14+0.00  $3.07    -3.6%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
 Solana      raydium-amm   XDC-USDC         $34.9M          0.04+0.00  $3.02    -3.6%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
 OP Mainnet  uniswap-v4    USDC-FNX        $645.3k          0.04+0.00  $3.06    -3.7%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
-Solana      raydium-amm   NIGHT-USDC       $39.0M          0.03+0.00  $3.02    -3.6%            never  COST_NEGATIVE,APY_OUTLIER,IL_RISK,IL_UNKNOWN
 Solana      raydium-amm   USDC-AKE         $37.9M          0.03+0.00  $3.02    -3.6%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
 Solana      raydium-amm   USDC-PHA         $71.0M          0.02+0.00  $3.02    -3.6%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
+Solana      raydium-amm   PEARL-USDC       $38.5M          0.02+0.00  $3.02    -3.6%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
 
 Pools analysed: 53 on Arbitrum, OP Mainnet, Base, Solana. Cost-negative: 12. Shown: 10.
 Left out: 0 under the TVL floor, 8 advertising an APY of 0 or less, 0 unreadable entries in the source.
@@ -74,7 +74,7 @@ all chains        53             12  22.6%       9 of 24
 
 Source: file tests/fixtures/pools_sample.json
 Prices: file tests/fixtures/prices_sample.json
-Sorted with cost-negative pools first, the highest advertised APY leading, then the other pools by net APY, highest first.
+Sorted with cost-negative pools first, the highest advertised APY leading, then the other pools by net APY, highest first. In each group, pools with an APY_OUTLIER come last.
 ```
 
 The real output goes on to print the assumptions, the cost of one transaction on each chain, any
@@ -325,8 +325,9 @@ To support another chain, add an entry to `COST_TABLE` in `src/defi_risk_tools/c
 
 The most misleading pools come first. Cost-negative pools lead, and among them the pools that
 advertise the **highest APY**: they look the best and lose money. The other pools follow, by
-net APY, highest first. Ties are broken by TVL (largest first) and then by name, so the same data
-always gives the same order. Impermanent loss is estimated for every pool first, so the order
+net APY, highest first. In each group, pools flagged `APY_OUTLIER` come last: their APY is not to
+be trusted, so it should not decide what leads. Ties are broken by TVL (largest first) and then by
+name, so the same data always gives the same order. Impermanent loss is estimated for every pool first, so the order
 counts it; then `--only-negative` is applied, and then `--limit`.
 
 ## Limitations
