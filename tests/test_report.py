@@ -30,11 +30,13 @@ def build_scan(make_pool):
             rows=results,
             assumptions=assumptions,
             min_tvl_usd=100_000.0,
+            include_zero_apy=False,
             tx_costs=tx_costs,
             source="a test",
             analysed=len(results),
             cost_negative=sum(result.cost_negative for result in results),
             below_min_tvl=0,
+            zero_apy=0,
             skipped_entries=0,
             notes=cost_notes if notes is None else notes,
         )
@@ -170,6 +172,7 @@ def test_json_document_holds_assumptions_costs_counts_and_pools(build_scan, make
         "claim_every_days": 30,
         "il_cap": 0.5,
         "min_tvl_usd": 100000.0,
+        "include_zero_apy": False,
     }
     assert document["chain_costs"]["Arbitrum"]["gas_price_source"] == "default"
     assert document["counts"]["analysed"] == 2
@@ -194,8 +197,9 @@ def test_json_uses_null_for_no_break_even(build_scan, make_pool):
 def test_json_leaves_gas_fields_empty_on_a_fixed_fee_chain(make_pool):
     tx_costs, _ = resolve_tx_costs(["Solana"], client=None)
     scan = Scan(
-        rows=[], assumptions=Assumptions(), min_tvl_usd=0.0, tx_costs=tx_costs, source="t",
-        analysed=0, cost_negative=0, below_min_tvl=0, skipped_entries=0, notes=[],
+        rows=[], assumptions=Assumptions(), min_tvl_usd=0.0, include_zero_apy=True,
+        tx_costs=tx_costs, source="t", analysed=0, cost_negative=0, below_min_tvl=0,
+        zero_apy=0, skipped_entries=0, notes=[],
     )  # fmt: skip
 
     solana = json.loads(report.render_json(scan))["chain_costs"]["Solana"]

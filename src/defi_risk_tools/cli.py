@@ -60,6 +60,13 @@ LimitOption = Annotated[
 OnlyNegativeOption = Annotated[
     bool, typer.Option("--only-negative", help="Show only cost-negative pools.")
 ]
+IncludeZeroApyOption = Annotated[
+    bool,
+    typer.Option(
+        "--include-zero-apy",
+        help="Also show pools that advertise an APY of 0 or less (they are left out by default).",
+    ),
+]
 FromFileOption = Annotated[
     Path | None,
     typer.Option(
@@ -82,6 +89,7 @@ def scan(
     min_tvl: MinTvlOption = DEFAULT_MIN_TVL_USD,
     limit: LimitOption = DEFAULT_LIMIT,
     only_negative: OnlyNegativeOption = False,
+    include_zero_apy: IncludeZeroApyOption = False,
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON instead of a table.")] = False,
     from_file: FromFileOption = None,
 ) -> None:
@@ -94,6 +102,7 @@ def scan(
         min_tvl=min_tvl,
         limit=limit,
         only_negative=only_negative,
+        include_zero_apy=include_zero_apy,
         from_file=from_file,
     )
     typer.echo(render_json(result) if as_json else render_text(result))
@@ -111,6 +120,7 @@ def write_report(
     min_tvl: MinTvlOption = DEFAULT_MIN_TVL_USD,
     limit: LimitOption = DEFAULT_LIMIT,
     only_negative: OnlyNegativeOption = False,
+    include_zero_apy: IncludeZeroApyOption = False,
     from_file: FromFileOption = None,
 ) -> None:
     """Write the same scan as one self-contained HTML page (no scripts, no CDN)."""
@@ -122,6 +132,7 @@ def write_report(
         min_tvl=min_tvl,
         limit=limit,
         only_negative=only_negative,
+        include_zero_apy=include_zero_apy,
         from_file=from_file,
     )
     page = render_html(result, generated_on=datetime.now(UTC).date())
@@ -145,6 +156,7 @@ def build_scan(
     min_tvl: float,
     limit: int,
     only_negative: bool,
+    include_zero_apy: bool,
     from_file: Path | None,
 ) -> Scan:
     """Fetch (or read) the pools, run the model on the ones in scope and rank the results."""
@@ -169,10 +181,14 @@ def build_scan(
         hint = "" if from_file else " Use --from-file with a saved pools JSON to work offline."
         fail(f"{error}.{hint}")
 
-    in_scope = [pool for pool in parsed.pools if pool.chain in wanted]
-    analysed = [pool for pool in in_scope if pool.tvl_usd >= min_tvl]
+    selection = model.select_pools(
+        parsed.pools, chains=wanted, min_tvl_usd=min_tvl, include_zero_apy=include_zero_apy
+    )
     ranked = model.rank(
-        [model.evaluate_pool(pool, assumptions, tx_costs[pool.chain].usd) for pool in analysed]
+        [
+            model.evaluate_pool(pool, assumptions, tx_costs[pool.chain].usd)
+            for pool in selection.pools
+        ]
     )
     cost_negative = [result for result in ranked if result.cost_negative]
     shown = (cost_negative if only_negative else ranked)[:limit]
@@ -180,11 +196,13 @@ def build_scan(
         rows=shown,
         assumptions=assumptions,
         min_tvl_usd=min_tvl,
+        include_zero_apy=include_zero_apy,
         tx_costs=tx_costs,
         source=source,
         analysed=len(ranked),
         cost_negative=len(cost_negative),
-        below_min_tvl=len(in_scope) - len(analysed),
+        below_min_tvl=selection.below_min_tvl,
+        zero_apy=selection.zero_apy,
         skipped_entries=parsed.skipped,
         notes=notes,
     )

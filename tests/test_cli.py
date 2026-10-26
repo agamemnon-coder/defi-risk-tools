@@ -35,6 +35,16 @@ def table_rows(output: str) -> list[str]:
     return rows
 
 
+def sample_pools(sample_payload, *, chains=None, advertising_apy=None) -> list[dict]:
+    """Raw pools of the saved sample, optionally only some chains / only those with (no) APY."""
+    pools = sample_payload["data"]
+    if chains is not None:
+        pools = [pool for pool in pools if pool["chain"] in chains]
+    if advertising_apy is not None:
+        pools = [pool for pool in pools if (pool["apy"] > 0) is advertising_apy]
+    return pools
+
+
 def scan_json(*args) -> dict:
     result = runner.invoke(app, ["scan", "--json", *args])
     assert result.exit_code == 0, result.stderr
@@ -44,7 +54,7 @@ def scan_json(*args) -> dict:
 # Text output
 
 
-def test_scan_prints_a_table_from_the_sample(sample):
+def test_scan_prints_a_table_from_the_sample(sample, sample_payload):
     result = runner.invoke(app, ["scan", *sample, "--limit", "10"])
 
     assert result.exit_code == 0, result.stderr
@@ -53,7 +63,8 @@ def test_scan_prints_a_table_from_the_sample(sample):
     rows = table_rows(result.stdout)
     assert len(rows) == 10
     assert all("COST_NEGATIVE" in row for row in rows)  # the worst ten are all cost-negative
-    assert "Pools analysed: 61 on Arbitrum, OP Mainnet, Base, Solana." in result.stdout
+    analysed = len(sample_pools(sample_payload, advertising_apy=True))
+    assert f"Pools analysed: {analysed} on Arbitrum, OP Mainnet, Base, Solana." in result.stdout
     assert "not financial advice" in result.stdout
     assert "Position size" in result.stdout
 
@@ -81,19 +92,24 @@ def test_only_negative_shows_only_cost_negative_pools(sample):
     assert all("COST_NEGATIVE" in row for row in rows)
 
 
-def test_chain_option_filters_ignores_case_and_repeats(sample):
+def test_chain_option_filters_ignores_case_and_repeats(sample, sample_payload):
     document = scan_json(*sample, "--chain", "solana", "--chain", "op mainnet", "--limit", "100")
 
     assert {pool["chain"] for pool in document["pools"]} == {"Solana", "OP Mainnet"}
     assert list(document["chain_costs"]) == ["Solana", "OP Mainnet"]
-    assert document["counts"]["analysed"] == 16 + 15
+    chains = {"Solana", "OP Mainnet"}
+    assert document["counts"]["analysed"] == len(
+        sample_pools(sample_payload, chains=chains, advertising_apy=True)
+    )
 
 
-def test_a_chain_given_twice_is_scanned_once(sample):
+def test_a_chain_given_twice_is_scanned_once(sample, sample_payload):
     document = scan_json(*sample, "--chain", "base", "--chain", "Base", "--limit", "100")
 
     assert list(document["chain_costs"]) == ["Base"]
-    assert document["counts"]["analysed"] == 15
+    assert document["counts"]["analysed"] == len(
+        sample_pools(sample_payload, chains={"Base"}, advertising_apy=True)
+    )
 
 
 def test_an_unsupported_chain_is_a_usage_error_that_lists_the_supported_ones(sample):
@@ -110,7 +126,7 @@ def test_min_tvl_leaves_small_pools_out_and_counts_them(sample):
     assert all(pool["tvl_usd"] >= 10_000_000 for pool in document["pools"])
     counts = document["counts"]
     assert counts["below_min_tvl"] > 0
-    assert counts["analysed"] + counts["below_min_tvl"] == 61
+    assert counts["analysed"] + counts["below_min_tvl"] + counts["zero_apy"] == 61
 
 
 def test_pools_under_the_floor_are_left_out_unless_the_floor_is_lowered(sample_payload, tmp_path):
@@ -181,7 +197,7 @@ def test_no_arguments_print_help():
 # JSON output
 
 
-def test_json_output_is_pure_json_with_the_documented_shape(sample):
+def test_json_output_is_pure_json_with_the_documented_shape(sample, sample_payload):
     result = runner.invoke(app, ["scan", *sample, "--json", "--limit", "5"])
 
     assert result.exit_code == 0
@@ -191,22 +207,82 @@ def test_json_output_is_pure_json_with_the_documented_shape(sample):
         "notes", "pools",
     }  # fmt: skip
     assert len(document["pools"]) == 5
+    analysed = len(sample_pools(sample_payload, advertising_apy=True))
     assert document["counts"] == {
-        "analysed": 61,
+        "analysed": analysed,
         "cost_negative": document["counts"]["cost_negative"],
         "shown": 5,
         "below_min_tvl": 0,
+        "zero_apy": 61 - analysed,
         "skipped_entries": 0,
     }
 
 
-def test_json_is_sorted_cost_negative_first_then_lowest_net_apy_first(sample):
+def test_json_puts_cost_negative_pools_first_by_advertised_apy_then_the_rest_by_net_apy(sample):
     pools = scan_json(*sample, "--limit", "100")["pools"]
 
-    keys = [("COST_NEGATIVE" not in pool["flags"], pool["net_apy"]) for pool in pools]
-    assert keys == sorted(keys)
-    assert pools[0]["flags"][0] == "COST_NEGATIVE"
-    assert "COST_NEGATIVE" not in pools[-1]["flags"]
+    negative = [pool for pool in pools if "COST_NEGATIVE" in pool["flags"]]
+    rest = [pool for pool in pools if "COST_NEGATIVE" not in pool["flags"]]
+    assert negative
+    assert rest
+    assert pools == negative + rest
+    assert [pool["apy"] for pool in negative] == sorted(
+        (pool["apy"] for pool in negative), reverse=True
+    )
+    assert [pool["net_apy"] for pool in rest] == sorted(
+        (pool["net_apy"] for pool in rest), reverse=True
+    )
+
+
+def test_the_most_misleading_pools_of_the_sample_lead(sample):
+    pools = scan_json(*sample, "--limit", "3")["pools"]
+
+    # They advertise 8.24%, 6.77% and 4.67%, and each of them loses money after costs.
+    assert [pool["symbol"] for pool in pools] == ["USD.INFRA", "ETH-USDC", "GROVE-STEAKUSDC"]
+    assert [pool["apy"] for pool in pools] == pytest.approx([8.24, 6.77, 4.67], abs=0.005)
+    assert all("COST_NEGATIVE" in pool["flags"] and pool["net_usd"] < 0 for pool in pools)
+
+
+# Pools that advertise no APY
+
+
+def test_pools_advertising_no_apy_are_left_out_and_counted(sample, sample_payload):
+    zero = {pool["pool"] for pool in sample_pools(sample_payload, advertising_apy=False)}
+
+    document = scan_json(*sample, "--limit", "100")
+
+    assert zero
+    assert not zero & {pool["pool"] for pool in document["pools"]}
+    assert all(pool["apy"] > 0 for pool in document["pools"])
+    assert document["counts"]["zero_apy"] == len(zero)
+    assert document["assumptions"]["include_zero_apy"] is False
+
+
+def test_include_zero_apy_brings_them_back(sample, sample_payload):
+    zero = {pool["pool"] for pool in sample_pools(sample_payload, advertising_apy=False)}
+
+    document = scan_json(*sample, "--limit", "100", "--include-zero-apy")
+
+    pools = document["pools"]
+    assert zero <= {pool["pool"] for pool in pools}
+    assert document["counts"]["analysed"] == 61
+    assert document["counts"]["zero_apy"] == 0
+    assert document["assumptions"]["include_zero_apy"] is True
+    # They advertise the least, so they come last among the cost-negative pools.
+    negative = [pool for pool in pools if "COST_NEGATIVE" in pool["flags"]]
+    assert {pool["pool"] for pool in negative[-len(zero) :]} == zero
+
+
+def test_the_text_report_says_how_many_zero_apy_pools_were_left_out(sample, sample_payload):
+    zero = len(sample_pools(sample_payload, advertising_apy=False))
+
+    default = runner.invoke(app, ["scan", *sample]).stdout
+    included = runner.invoke(app, ["scan", *sample, "--include-zero-apy"]).stdout
+
+    assert f"{zero} advertising an APY of 0 or less" in default
+    assert "--include-zero-apy" in default
+    assert "0 advertising an APY of 0 or less" in included
+    assert re.search(r"Zero-APY pools\s+kept", included)
 
 
 def test_json_net_apy_matches_a_hand_calculation(sample):
@@ -233,7 +309,7 @@ def test_json_lists_reward_and_underlying_tokens(sample):
 
 
 def test_json_every_il_risk_pool_in_the_sample_is_also_il_unknown(sample):
-    pools = scan_json(*sample, "--limit", "100")["pools"]
+    pools = scan_json(*sample, "--limit", "100", "--include-zero-apy")["pools"]
 
     il_risk = [pool for pool in pools if "IL_RISK" in pool["flags"]]
     assert len(il_risk) == 28

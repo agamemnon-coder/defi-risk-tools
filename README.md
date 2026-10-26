@@ -22,9 +22,10 @@ few weeks, these costs can eat the whole yield:
 
 `yield-scan` reads the public [DeFiLlama](https://defillama.com/yields) yield data, applies the
 cost model below to a position of a size and holding period you choose (default: $1,000 for 30
-days), and lists the pools with the worst result first. A pool is `COST_NEGATIVE` when the
-costs are larger than what it pays. The point is user protection: to make these costs visible
-before someone deposits, not to rank the best yields.
+days), and puts the most misleading pools first: the ones that advertise the highest APY and
+still lose money. A pool is `COST_NEGATIVE` when the costs are larger than what it pays. The
+point is user protection: to make these costs visible before someone deposits, not to rank the
+best yields.
 
 It is free and open source (MIT). Version 1 covers Arbitrum, OP Mainnet, Base and Solana.
 
@@ -37,23 +38,23 @@ $ uv run yield-scan scan --from-file tests/fixtures/pools_sample.json --limit 10
 ```text
 Cost-Negative Yield Scanner  -  estimates only, not financial advice
 
-chain       project          symbol              TVL  APY (base+reward)  costs  net APY  break-even size  flags
-----------  ---------------  --------------  -------  -----------------  -----  -------  ---------------  --------------------------------------------
-Arbitrum    pancakeswap-amm  WETH-GFC         $67.5M          0.00+0.00  $6.09    -7.4%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
-Arbitrum    concrete         THUSD-USDC-ARB    $8.7M          0.00+0.00  $6.09    -7.4%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
-OP Mainnet  velodrome-v3     USD₮0-USDT        $6.2M          0.00+0.00  $6.06    -7.4%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
-OP Mainnet  uniswap-v3       WETH-WBTC       $749.3k          0.00+0.00  $6.06    -7.4%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
-OP Mainnet  uniswap-v4       USDC-FNX        $645.3k          0.04+0.00  $6.06    -7.3%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
-Solana      raydium-amm      IOST-USDC        $90.7M          0.01+0.00  $6.01    -7.3%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
-Solana      raydium-amm      USDC-PHA         $71.0M          0.02+0.00  $6.01    -7.3%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
-Solana      raydium-amm      PEARL-USDC       $38.5M          0.02+0.00  $6.01    -7.3%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
-Solana      raydium-amm      NIGHT-USDC       $39.0M          0.03+0.00  $6.01    -7.3%            never  COST_NEGATIVE,APY_OUTLIER,IL_RISK,IL_UNKNOWN
-Solana      raydium-amm      USDC-AKE         $37.9M          0.03+0.00  $6.01    -7.3%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
+chain       project            symbol               TVL  APY (base+reward)  costs  net APY  break-even size  flags
+----------  -----------------  ---------------  -------  -----------------  -----  -------  ---------------  -------------------------------------------------
+Solana      loopscale-lending  USD.INFRA          $8.0M          2.99+5.25  $6.02    -1.7%            never  COST_NEGATIVE,REWARD_DEPENDENT
+Arbitrum    gmx-evm            ETH-USDC          $47.5M          6.77+0.00  $6.09   -0.65%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
+Base        morpho-blue        GROVE-STEAKUSDC  $438.5M          4.67+0.00  $6.07    -2.7%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
+OP Mainnet  morpho-blue        RE7WETH            $3.2M          0.82+2.92  $6.08    -5.1%            never  COST_NEGATIVE,REWARD_DEPENDENT
+Base        aave-v3            WETH              $42.1M          1.39+1.86  $6.09    -5.1%            never  COST_NEGATIVE,REWARD_DEPENDENT
+Arbitrum    morpho-blue        KPK-EURE-YIELD     $1.6M          0.13+2.87  $6.13    -5.9%            never  COST_NEGATIVE,REWARD_DEPENDENT,IL_RISK,IL_UNKNOWN
+Arbitrum    gmx-evm            WBTC.B-USDC       $56.9M          2.54+0.00  $6.09    -4.9%            never  COST_NEGATIVE,IL_RISK,IL_UNKNOWN
+OP Mainnet  uniswap-v3         USDC-ZCHF          $1.5M          1.28+0.00  $6.06    -6.1%            never  COST_NEGATIVE
+Base        aerodrome-v1       VVV-DIEM           $9.0M          0.00+0.80  $6.09    -7.0%            never  COST_NEGATIVE,REWARD_DEPENDENT,IL_RISK,IL_UNKNOWN
+Solana      kamino-lend        BONKSOL            $5.7M          0.00+0.33  $6.02    -7.2%            never  COST_NEGATIVE,REWARD_DEPENDENT,APY_OUTLIER
 
-Pools analysed: 61 on Arbitrum, OP Mainnet, Base, Solana. Cost-negative: 27. Shown: 10.
-Left out: 0 under the TVL floor, 0 unreadable entries in the source.
+Pools analysed: 53 on Arbitrum, OP Mainnet, Base, Solana. Cost-negative: 19. Shown: 10.
+Left out: 0 under the TVL floor, 8 advertising an APY of 0 or less, 0 unreadable entries in the source.
 Source: file tests/fixtures/pools_sample.json
-Sorted with cost-negative pools first, then by net APY, lowest first.
+Sorted with cost-negative pools first, the highest advertised APY leading, then the other pools by net APY, highest first.
 ```
 
 The real output goes on to print the assumptions, the cost of one transaction on each chain, any
@@ -63,10 +64,12 @@ rule of the tool: every report states the assumptions it was computed with.
 The fixture is a real DeFiLlama response saved on 2026-10-26 (61 pools), and `--from-file` makes no
 network calls, so you get the same output as above.
 
-The first rows are pools that pay almost nothing. The two swaps cost $6.00 on a $1,000 position,
-and there is no yield to pay for them, so the position loses money for as long as it is held.
-"Net APY" annualises the loss: -7.4% a year is -$6.09 over 30 days. Further down the list are the
-pools that advertise a real APY and still lose, as in the worked example below.
+The first rows are the most misleading pools: they advertise a real APY and lose money anyway.
+USD.INFRA on Solana shows 8.24% a year, but 5.25 points of that are reward tokens (half of which
+are assumed lost) and getting in and out of it costs $6.00 in swaps, so $1,000 held for 30 days
+ends $1.41 down. "Net APY" annualises the result: -1.7% a year. Pools that advertise no APY at
+all are left out (8 of the 61 here), because they mislead nobody; `--include-zero-apy` brings them
+back.
 
 A sample report built from the same data is in [`docs/report.html`](docs/report.html).
 
@@ -96,6 +99,7 @@ $ uv run yield-scan report --out report.html   # one self-contained HTML page
 | `--min-tvl USD` | 100000 | Leave out pools with less TVL than this. |
 | `--limit N` | 50 | Show at most this many pools. |
 | `--only-negative` | off | Show only `COST_NEGATIVE` pools. |
+| `--include-zero-apy` | off | Also show pools that advertise an APY of 0 or less. They are left out by default: they mislead nobody. |
 | `--json` | off | Print JSON instead of the table (`scan` only). |
 | `--from-file PATH` | none | Read a saved pools JSON instead of calling the API. |
 | `--out PATH` | `report.html` | Where `report` writes the page (`report` only). |
@@ -188,6 +192,7 @@ they live in `Assumptions` in `src/defi_risk_tools/model.py` and the cost table 
 | What is not counted | Deposit or withdrawal fees that are not already in the APY, price impact, bridging, Solana account rent, taxes, lockups, depegs and smart contract risk. |
 | Net APY | One-off costs annualised: a loss of $6 on $1,000 over 30 days is shown as −7.3% a year. Short holds therefore look more extreme than long ones. |
 | TVL floor | Pools with less than $100,000 TVL are left out (`--min-tvl`). |
+| Zero-APY pools | Pools whose advertised `apy` is 0 or less are left out (`--include-zero-apy` keeps them). The count is reported. |
 | Data | DeFiLlama's values are taken as given. An entry that cannot be read (a missing id or TVL, a text where a number should be, no APY at all) is skipped and counted in the report. |
 
 ### The cost table
@@ -228,8 +233,9 @@ To support another chain, add an entry to `COST_TABLE` in `src/defi_risk_tools/c
 
 ### Sorting
 
-Cost-negative pools come first, then pools are ordered by net APY, lowest first, so the worst
-results are at the top. Ties are broken by TVL (largest first) and then by name, so the same data
+The most misleading pools come first. Cost-negative pools lead, and among them the pools that
+advertise the **highest APY**: they look the best and lose money. The other pools follow, by
+net APY, highest first. Ties are broken by TVL (largest first) and then by name, so the same data
 always gives the same order. `--only-negative` is applied before `--limit`.
 
 ## Limitations

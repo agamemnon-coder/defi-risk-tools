@@ -111,3 +111,13 @@ For each pool:
 
 - Zero-Airdrop Calculator: the cost of farming a hoped-for airdrop, and what is lost if it is zero.
 - History, using DeFiLlama's `chart/{pool}`.
+
+## v1.1 changes
+
+1. **Ranking.** Cost-negative pools come first, sorted by their advertised `apy`, highest first, so
+   that the most misleading pools lead: they look like X% and lose money. The other pools follow,
+   sorted by net APY, highest first. Ties are broken as before (TVL, then chain, project, symbol
+   and pool id).
+2. **Zero-APY pools.** Pools whose advertised `apy` is 0 or less are left out by default, since
+   they mislead nobody. `--include-zero-apy` brings them back. The report says how many were left
+   out.

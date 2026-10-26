@@ -21,7 +21,10 @@ DISCLAIMER = (
     "Estimates only, not financial advice. This tool reads public data and never touches a wallet."
 )
 DEFILLAMA_POOL_URL = "https://defillama.com/yields/pool/"
-SORT_NOTE = "Sorted with cost-negative pools first, then by net APY, lowest first."
+SORT_NOTE = (
+    "Sorted with cost-negative pools first, the highest advertised APY leading, "
+    "then the other pools by net APY, highest first."
+)
 
 LIMITATIONS = (
     "These numbers come from a simple model. They are estimates, not predictions, and not "
@@ -44,11 +47,13 @@ class Scan:
     rows: list[PoolResult]  # sorted, filtered and limited
     assumptions: Assumptions
     min_tvl_usd: float
+    include_zero_apy: bool
     tx_costs: dict[str, TxCost]  # one entry per scanned chain
     source: str
     analysed: int  # pools the model ran on: scanned chains, at or above the TVL floor
     cost_negative: int  # how many of those are cost-negative
     below_min_tvl: int  # pools on the scanned chains that were left out for low TVL
+    zero_apy: int  # pools above the floor that were left out for advertising an APY of 0 or less
     skipped_entries: int  # unreadable entries in the source
     notes: list[str]
 
@@ -123,6 +128,12 @@ def assumption_rows(scan: Scan) -> list[tuple[str, str]]:
             "position; not counted when DeFiLlama gives no figure",
         ),
         ("TVL floor", f"pools under {format_plain_money(scan.min_tvl_usd)} are left out"),
+        (
+            "Zero-APY pools",
+            "kept"
+            if scan.include_zero_apy
+            else "left out: they advertise nothing, so they mislead nobody (--include-zero-apy)",
+        ),
     ]
 
 
@@ -130,8 +141,8 @@ def counts_lines(scan: Scan) -> list[str]:
     return [
         f"Pools analysed: {scan.analysed} on {', '.join(scan.tx_costs)}. "
         f"Cost-negative: {scan.cost_negative}. Shown: {len(scan.rows)}.",
-        f"Left out: {scan.below_min_tvl} under the TVL floor, "
-        f"{scan.skipped_entries} unreadable entries in the source.",
+        f"Left out: {scan.below_min_tvl} under the TVL floor, {scan.zero_apy} advertising an APY "
+        f"of 0 or less, {scan.skipped_entries} unreadable entries in the source.",
     ]
 
 
@@ -207,13 +218,18 @@ def render_json(scan: Scan) -> str:
         "version": __version__,
         "disclaimer": DISCLAIMER,
         "source": scan.source,
-        "assumptions": {**asdict(scan.assumptions), "min_tvl_usd": scan.min_tvl_usd},
+        "assumptions": {
+            **asdict(scan.assumptions),
+            "min_tvl_usd": scan.min_tvl_usd,
+            "include_zero_apy": scan.include_zero_apy,
+        },
         "chain_costs": {chain: _tx_cost_record(tx) for chain, tx in scan.tx_costs.items()},
         "counts": {
             "analysed": scan.analysed,
             "cost_negative": scan.cost_negative,
             "shown": len(scan.rows),
             "below_min_tvl": scan.below_min_tvl,
+            "zero_apy": scan.zero_apy,
             "skipped_entries": scan.skipped_entries,
         },
         "notes": scan.notes,
@@ -390,7 +406,7 @@ def _html_table(rows: list[PoolResult], a: Assumptions) -> str:
     body = "\n".join(_html_row(result, a) for result in rows)
     return (
         '<div class="table-wrap"><table>\n'
-        '<caption class="sr">Pools sorted by net APY, cost-negative first</caption>\n'
+        '<caption class="sr">Pools, cost-negative first</caption>\n'
         f"<thead><tr>{head}</tr></thead>\n<tbody>\n{body}\n</tbody>\n</table></div>"
     )
 

@@ -301,16 +301,52 @@ def test_flags_come_in_a_fixed_order(make_pool):
 # Ranking and assumptions
 
 
-def test_cost_negative_pools_come_first_then_lowest_net_apy_first(make_pool):
-    good = evaluate_pool(make_pool(pool_id="good", apy_base=8.0), Assumptions(), TX)
-    fine = evaluate_pool(make_pool(pool_id="fine", apy_base=4.0), Assumptions(), TX)
-    bad = evaluate_pool(make_pool(pool_id="bad", apy_base=0.5, stablecoin=False), Assumptions(), TX)
-    worse = evaluate_pool(make_pool(pool_id="worse", apy_base=0.0), Assumptions(), TX)
+def test_cost_negative_pools_lead_and_the_highest_advertised_apy_comes_first(make_pool):
+    # Each of these loses money: a stablecoin pool pays $0.30 in gas and a volatile one adds $6.
+    bad = {"stablecoin": False}
+    advertises_most = evaluate_pool(make_pool(pool_id="a", apy_base=6.0, **bad), Assumptions(), TX)
+    advertises_less = evaluate_pool(make_pool(pool_id="b", apy_base=2.0, **bad), Assumptions(), TX)
+    advertises_none = evaluate_pool(make_pool(pool_id="c", apy_base=0.0), Assumptions(), TX)
 
-    ranked = model.rank([good, fine, worse, bad])
+    ranked = model.rank([advertises_none, advertises_less, advertises_most])
 
-    # worse: net -0.30 on a stablecoin pool; bad: -6.30 + yield on a volatile one
-    assert [r.pool.pool_id for r in ranked] == ["bad", "worse", "fine", "good"]
+    assert all(r.cost_negative for r in ranked)
+    assert [r.pool.pool_id for r in ranked] == ["a", "b", "c"]  # advertised APY: 6%, 2%, 0%
+    # It is not the order of net APY: "c" loses the least (only gas, no swap) and still comes last.
+    assert ranked[2].net_apy > ranked[1].net_apy
+
+
+def test_the_other_pools_follow_by_net_apy_highest_first(make_pool):
+    low = evaluate_pool(make_pool(pool_id="low", apy_base=4.0), Assumptions(), TX)
+    mid = evaluate_pool(make_pool(pool_id="mid", apy_base=8.0), Assumptions(), TX)
+    high = evaluate_pool(make_pool(pool_id="high", apy_base=12.0), Assumptions(), TX)
+
+    ranked = model.rank([low, high, mid])
+
+    assert not any(r.cost_negative for r in ranked)
+    assert [r.pool.pool_id for r in ranked] == ["high", "mid", "low"]
+
+
+def test_cost_negative_pools_come_before_better_looking_ones_that_do_not_lose(make_pool):
+    loses = evaluate_pool(
+        make_pool(pool_id="loses", apy_base=1.0, stablecoin=False), Assumptions(), TX
+    )
+    wins = evaluate_pool(make_pool(pool_id="wins", apy_base=50.0), Assumptions(), TX)
+
+    assert [r.pool.pool_id for r in model.rank([wins, loses])] == ["loses", "wins"]
+
+
+def test_equal_pools_are_ordered_by_tvl_then_by_name(make_pool):
+    pools = [
+        make_pool(pool_id="small", tvl_usd=1e6, symbol="AAA"),
+        make_pool(pool_id="big", tvl_usd=9e6, symbol="ZZZ"),
+        make_pool(pool_id="mid-b", tvl_usd=5e6, symbol="BBB"),
+        make_pool(pool_id="mid-a", tvl_usd=5e6, symbol="AAA"),
+    ]
+
+    ranked = model.rank([evaluate_pool(pool, Assumptions(), TX) for pool in pools])
+
+    assert [r.pool.pool_id for r in ranked] == ["big", "mid-a", "mid-b", "small"]
 
 
 def test_ranking_does_not_depend_on_the_input_order(make_pool):
@@ -321,6 +357,55 @@ def test_ranking_does_not_depend_on_the_input_order(make_pool):
     backwards = [r.pool.pool_id for r in model.rank(results[::-1])]
 
     assert forwards == backwards
+
+
+# The cheap filters
+
+
+def test_select_pools_filters_by_chain_and_tvl_floor_and_counts_what_it_drops(make_pool):
+    pools = [
+        make_pool(pool_id="keep", chain="Base", tvl_usd=100_000.0),  # exactly at the floor
+        make_pool(pool_id="small", chain="Base", tvl_usd=99_999.0),
+        make_pool(pool_id="elsewhere", chain="Solana", tvl_usd=5e6),
+        make_pool(pool_id="also-keep", chain="Arbitrum", tvl_usd=5e6),
+    ]
+
+    selection = model.select_pools(
+        pools, chains=["Base", "Arbitrum"], min_tvl_usd=100_000.0, include_zero_apy=False
+    )
+
+    assert [pool.pool_id for pool in selection.pools] == ["keep", "also-keep"]
+    assert selection.below_min_tvl == 1  # chains that were not asked for are not counted
+    assert selection.zero_apy == 0
+
+
+def test_pools_advertising_no_apy_are_left_out_unless_asked_for(make_pool):
+    pools = [
+        make_pool(pool_id="pays", apy_base=3.0),
+        make_pool(pool_id="zero", apy_base=0.0),
+        make_pool(pool_id="negative", apy_base=-1.0),
+        make_pool(pool_id="only-rewards", apy_base=0.0, apy_reward=2.0),
+    ]
+
+    left_out = model.select_pools(
+        pools, chains=["Arbitrum"], min_tvl_usd=0.0, include_zero_apy=False
+    )
+    kept = model.select_pools(pools, chains=["Arbitrum"], min_tvl_usd=0.0, include_zero_apy=True)
+
+    assert [pool.pool_id for pool in left_out.pools] == ["pays", "only-rewards"]
+    assert left_out.zero_apy == 2
+    assert [pool.pool_id for pool in kept.pools] == ["pays", "zero", "negative", "only-rewards"]
+    assert kept.zero_apy == 0
+
+
+def test_a_pool_under_the_tvl_floor_is_counted_once_not_as_zero_apy(make_pool):
+    pools = [make_pool(pool_id="tiny", tvl_usd=10.0, apy_base=0.0)]
+
+    selection = model.select_pools(
+        pools, chains=["Arbitrum"], min_tvl_usd=100_000.0, include_zero_apy=False
+    )
+
+    assert (selection.below_min_tvl, selection.zero_apy) == (1, 0)
 
 
 @pytest.mark.parametrize(

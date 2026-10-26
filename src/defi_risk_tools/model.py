@@ -177,6 +177,30 @@ def flags_for(pool: Pool, net_usd: float) -> tuple[str, ...]:
     return tuple(flags)
 
 
+@dataclass(frozen=True)
+class Selection:
+    pools: list[Pool]
+    below_min_tvl: int  # on the chosen chains, but under the TVL floor
+    zero_apy: int  # above the floor, but advertising an APY of 0 or less
+
+
+def select_pools(
+    pools: list[Pool], *, chains: list[str], min_tvl_usd: float, include_zero_apy: bool
+) -> Selection:
+    """The cheap filters: chain, TVL floor, and pools that advertise no yield.
+
+    A pool whose advertised APY is 0 or less misleads nobody, so it is left out unless asked for.
+    """
+    in_scope = [pool for pool in pools if pool.chain in chains]
+    above_floor = [pool for pool in in_scope if pool.tvl_usd >= min_tvl_usd]
+    kept = above_floor if include_zero_apy else [pool for pool in above_floor if pool.apy > 0]
+    return Selection(
+        pools=kept,
+        below_min_tvl=len(in_scope) - len(above_floor),
+        zero_apy=len(above_floor) - len(kept),
+    )
+
+
 def evaluate_pool(pool: Pool, a: Assumptions, tx_cost_usd: float) -> PoolResult:
     """Run the whole model on one pool."""
     gross = gross_yield_usd(pool, a.size_usd, a.days, a.haircut)
@@ -198,19 +222,16 @@ def evaluate_pool(pool: Pool, a: Assumptions, tx_cost_usd: float) -> PoolResult:
 
 
 def rank(results: list[PoolResult]) -> list[PoolResult]:
-    """Cost-negative pools first, then by net APY, lowest first. Ties are broken the same way
-    every time, so the same data always gives the same order."""
+    """Put the most misleading pools first.
+
+    Cost-negative pools lead, and among them the ones that advertise the highest APY: they look
+    the best and lose money. The other pools follow, by net APY, highest first. Ties are broken the
+    same way every time, so the same data always gives the same order.
+    """
 
     def key(result: PoolResult) -> tuple:
         pool = result.pool
-        return (
-            not result.cost_negative,
-            result.net_apy,
-            -pool.tvl_usd,
-            pool.chain,
-            pool.project,
-            pool.symbol,
-            pool.pool_id,
-        )
+        order = (0, -pool.apy) if result.cost_negative else (1, -result.net_apy)
+        return (*order, -pool.tvl_usd, pool.chain, pool.project, pool.symbol, pool.pool_id)
 
     return sorted(results, key=key)
