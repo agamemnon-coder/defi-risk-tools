@@ -1,0 +1,48 @@
+[project]
+name = "defi-risk-tools"
+version = "0.1.0"
+description = "Cost-Negative Yield Scanner: what a DeFi yield pays after gas, swap fees and reward-token decay."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "the defi-risk-tools contributors" }]
+keywords = ["defi", "yield", "gas", "risk", "defillama"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial",
+]
+dependencies = [
+    "httpx>=0.27",
+    "typer>=0.12",
+]
+
+[project.urls]
+Repository = "https://github.com/agamemnon-coder/defi-risk-tools"
+
+[project.scripts]
+yield-scan = "defi_risk_tools.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "respx>=0.21",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.32,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "C4"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
