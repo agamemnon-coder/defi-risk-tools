@@ -2,7 +2,7 @@
 
 import json
 import textwrap
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import date
 from html import escape
@@ -182,6 +182,27 @@ def counts_lines(scan: Scan) -> list[str]:
     return lines
 
 
+def total_summary(summaries: Sequence[ChainSummary]) -> ChainSummary:
+    """All the chains together."""
+    return ChainSummary(
+        chain="all chains",
+        analysed=sum(summary.analysed for summary in summaries),
+        cost_negative=sum(summary.cost_negative for summary in summaries),
+        il_risk=sum(summary.il_risk for summary in summaries),
+        il_estimated=sum(summary.il_estimated for summary in summaries),
+        il_unknown=sum(summary.il_unknown for summary in summaries),
+    )
+
+
+def format_share(summary: ChainSummary) -> str:
+    share = summary.cost_negative_share
+    return "-" if share is None else f"{share:.1%}"
+
+
+def format_il_coverage(summary: ChainSummary) -> str:
+    return f"{summary.il_estimated} of {summary.il_risk}"
+
+
 def format_days(days: int) -> str:
     return f"{days} day" if days == 1 else f"{days} days"
 
@@ -200,14 +221,19 @@ TEXT_HEADER = (
     "flags",
 )
 TEXT_RIGHT_ALIGNED = {3, 4, 5, 6, 7}
+TEXT_CHAIN_HEADER = ("chain", "analysed", "cost-negative", "share", "IL estimated")
+TEXT_CHAIN_RIGHT_ALIGNED = {1, 2, 3, 4}
 TEXT_WIDTH = 100  # long lines under the table wrap here
 
 
 def render_text(scan: Scan) -> str:
     lines = ["Cost-Negative Yield Scanner  -  estimates only, not financial advice", ""]
     lines.append(_text_table(scan.rows) if scan.rows else "No pools match.")
-    lines += ["", *counts_lines(scan), f"Source: {scan.source}", f"Prices: {scan.price_source}"]
-    lines += [SORT_NOTE, "", "Assumptions"]
+    lines += ["", *counts_lines(scan)]
+    if scan.chain_summaries:
+        lines += ["", "By chain", *_text_chain_table(scan.chain_summaries)]
+    lines += ["", f"Source: {scan.source}", f"Prices: {scan.price_source}", SORT_NOTE]
+    lines += ["", "Assumptions"]
     for label, text in assumption_rows(scan):
         lines += _hanging(label, text, 18)
     lines += ["", "Cost of one transaction"]
@@ -231,17 +257,39 @@ def _hanging(label: str, text: str, label_width: int) -> list[str]:
 
 def _text_table(rows: list[PoolResult]) -> str:
     cells = [_text_cells(row) for row in rows]
-    widths = [max(len(cell) for cell in column) for column in zip(TEXT_HEADER, *cells, strict=True)]
+    return "\n".join(_columns(TEXT_HEADER, cells, TEXT_RIGHT_ALIGNED))
 
-    def line(values: tuple[str, ...] | list[str]) -> str:
+
+def _text_chain_table(summaries: list[ChainSummary]) -> list[str]:
+    cells = [_text_chain_cells(summary) for summary in [*summaries, total_summary(summaries)]]
+    return _columns(TEXT_CHAIN_HEADER, cells, TEXT_CHAIN_RIGHT_ALIGNED)
+
+
+def _columns(
+    header: Sequence[str], rows: Sequence[Sequence[str]], right_aligned: set[int]
+) -> list[str]:
+    """Lines of a table: a header, a rule and the rows, each column as wide as its widest cell."""
+    widths = [max(len(cell) for cell in column) for column in zip(header, *rows, strict=True)]
+
+    def line(values: Sequence[str]) -> str:
         padded = [
-            value.rjust(width) if i in TEXT_RIGHT_ALIGNED else value.ljust(width)
+            value.rjust(width) if i in right_aligned else value.ljust(width)
             for i, (value, width) in enumerate(zip(values, widths, strict=True))
         ]
         return "  ".join(padded).rstrip()
 
     rule = line(["-" * width for width in widths])
-    return "\n".join([line(TEXT_HEADER), rule, *(line(row) for row in cells)])
+    return [line(header), rule, *(line(row) for row in rows)]
+
+
+def _text_chain_cells(summary: ChainSummary) -> list[str]:
+    return [
+        summary.chain,
+        str(summary.analysed),
+        str(summary.cost_negative),
+        format_share(summary),
+        format_il_coverage(summary),
+    ]
 
 
 def _text_cells(result: PoolResult) -> list[str]:
@@ -287,10 +335,24 @@ def render_json(scan: Scan) -> str:
             "il_estimated": il_estimated,
             "il_unknown": il_unknown,
         },
+        "chain_summary": {
+            summary.chain: _chain_summary_record(summary) for summary in scan.chain_summaries
+        },
         "notes": scan.notes,
         "pools": [_pool_record(result) for result in scan.rows],
     }
     return json.dumps(document, indent=2)
+
+
+def _chain_summary_record(summary: ChainSummary) -> dict:
+    return {
+        "analysed": summary.analysed,
+        "cost_negative": summary.cost_negative,
+        "cost_negative_share": _round_or_none(summary.cost_negative_share),
+        "il_risk": summary.il_risk,
+        "il_estimated": summary.il_estimated,
+        "il_unknown": summary.il_unknown,
+    }
 
 
 def _tx_cost_record(tx_cost: TxCost) -> dict:
@@ -361,10 +423,13 @@ a{color:var(--link)}
 .notice{background:var(--note-bg);color:var(--note);border:1px solid var(--line);
 border-radius:8px;padding:10px 14px}
 .table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px}
+.table-wrap.narrow{max-width:44rem}
 table{border-collapse:collapse;width:100%;font-size:.875rem}
 th,td{padding:8px 10px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
 thead th{background:var(--panel);vertical-align:bottom}
-tbody tr:last-child td{border-bottom:0}
+tbody tr:last-child td,tbody tr:last-child th{border-bottom:0}
+tfoot th,tfoot td{background:var(--panel);font-weight:600;border-top:1px solid var(--line);
+border-bottom:0}
 tr.cost-negative td:first-child{box-shadow:inset 3px 0 0 var(--neg)}
 .num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 small{display:block;color:var(--muted);font-size:.75rem}
@@ -383,8 +448,17 @@ ul{margin:0;padding-left:20px}
 li{margin-bottom:6px}
 footer{color:var(--muted);font-size:.85rem;margin-top:32px}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-@media (max-width:640px){dl{grid-template-columns:1fr}dd{margin-bottom:8px}}
+@media (max-width:640px){dl{grid-template-columns:1fr}dd{margin-bottom:8px}
+.narrow th,.narrow td{padding:8px 6px}.narrow thead .num{white-space:normal}}
 """
+
+HTML_CHAIN_HEADERS = (
+    ("Chain", False),
+    ("Analysed", True),
+    ("Cost-negative", True),
+    ("Share", True),
+    ("IL estimated", True),
+)
 
 HTML_HEADERS = (
     ("Chain", False),
@@ -407,6 +481,11 @@ def render_html(scan: Scan, generated_on: date) -> str:
     limitations = _html_list(LIMITATIONS)
     position = f"Position {format_plain_money(a.size_usd)}, held {format_days(a.days)}."
     notes = f"<h2>Notes</h2>\n{_html_list(scan.notes)}" if scan.notes else ""
+    by_chain = (
+        f"<h2>By chain</h2>\n{_html_chain_table(scan.chain_summaries)}"
+        if scan.chain_summaries
+        else ""
+    )
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -427,6 +506,8 @@ fall of reward tokens and impermanent loss.</p>
 <main>
 <h2>Summary</h2>
 <p>{escape(" ".join(counts_lines(scan)))}</p>
+{by_chain}
+<h2>Pools</h2>
 <p>{escape(SORT_NOTE)} {escape(position)}</p>
 {_html_table(scan.rows, a)}
 <h2>Flags</h2>
@@ -454,6 +535,29 @@ Pool links go to DeFiLlama.</p>
 </body>
 </html>
 """
+
+
+def _html_chain_table(summaries: list[ChainSummary]) -> str:
+    head = "".join(_th(name, numeric) for name, numeric in HTML_CHAIN_HEADERS)
+    body = "\n".join(_html_chain_row(summary) for summary in summaries)
+    total = _html_chain_row(total_summary(summaries))
+    return (
+        '<div class="table-wrap narrow"><table>\n'
+        '<caption class="sr">Pools analysed and cost-negative, by chain</caption>\n'
+        f"<thead><tr>{head}</tr></thead>\n<tbody>\n{body}\n</tbody>\n"
+        f"<tfoot>{total}</tfoot>\n</table></div>"
+    )
+
+
+def _html_chain_row(summary: ChainSummary) -> str:
+    cells = [
+        f'<th scope="row">{escape(summary.chain)}</th>',
+        f'<td class="num">{summary.analysed}</td>',
+        f'<td class="num">{summary.cost_negative}</td>',
+        f'<td class="num">{escape(format_share(summary))}</td>',
+        f'<td class="num">{escape(format_il_coverage(summary))}</td>',
+    ]
+    return f"<tr>{''.join(cells)}</tr>"
 
 
 def _html_table(rows: list[PoolResult], a: Assumptions) -> str:

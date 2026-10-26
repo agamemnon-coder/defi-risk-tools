@@ -38,6 +38,14 @@ def table_rows(output: str) -> list[str]:
     return rows
 
 
+def by_chain_lines(output: str) -> list[str]:
+    """The lines of the "By chain" table of the text output, header and total row included."""
+    lines = output.splitlines()
+    start = lines.index("By chain")
+    end = next(i for i in range(start, len(lines)) if lines[i].startswith("all chains"))
+    return lines[start : end + 1]
+
+
 def sample_pools(sample_payload, *, chains=None, advertising_apy=None) -> list[dict]:
     """Raw pools of the saved sample, optionally only some chains / only those with (no) APY."""
     pools = sample_payload["data"]
@@ -207,7 +215,7 @@ def test_json_output_is_pure_json_with_the_documented_shape(sample, sample_paylo
     document = json.loads(result.stdout)  # the whole of stdout is one JSON document
     assert set(document) == {
         "tool", "version", "disclaimer", "source", "price_source", "assumptions", "chain_costs",
-        "counts", "notes", "pools",
+        "counts", "chain_summary", "notes", "pools",
     }  # fmt: skip
     assert len(document["pools"]) == 5
     analysed = len(sample_pools(sample_payload, advertising_apy=True))
@@ -225,6 +233,7 @@ def test_json_output_is_pure_json_with_the_documented_shape(sample, sample_paylo
         "il_estimated": 0,  # an offline run without --prices-file estimates nothing
         "il_unknown": at_risk,  # and none of the pools with IL risk has a figure from DeFiLlama
     }
+    assert list(document["chain_summary"]) == ["Arbitrum", "OP Mainnet", "Base", "Solana"]
 
 
 def test_json_puts_cost_negative_pools_first_by_advertised_apy_then_the_rest_by_net_apy(sample):
@@ -463,6 +472,7 @@ def test_the_limit_only_cuts_the_list_and_changes_neither_the_order_nor_the_coun
 
     assert cut["pools"] == full["pools"][:limit]
     assert cut["counts"] == {**full["counts"], "shown": min(limit, 53)}
+    assert cut["chain_summary"] == full["chain_summary"]
     assert cut["counts"]["analysed"] == 53
     assert cut["counts"]["cost_negative"] == 12
 
@@ -481,6 +491,7 @@ def test_the_headline_counts_of_the_text_report_do_not_depend_on_the_limit(sampl
         "Pools analysed: 53 on Arbitrum, OP Mainnet, Base, Solana. Cost-negative: 12. Shown: 40."
         in many
     )
+    assert by_chain_lines(few) == by_chain_lines(many)
 
 
 def test_only_negative_keeps_the_counts_of_every_pool_analysed(sample, prices_path):
@@ -643,9 +654,115 @@ def test_a_limit_of_one_shows_the_pool_that_leads_once_il_is_counted_and_counts_
     assert document["counts"]["analysed"] == 2
     assert document["counts"]["cost_negative"] == 2
     assert document["counts"]["il_estimated"] == 1
+    arbitrum = document["chain_summary"]["Arbitrum"]
+    assert arbitrum == {
+        "analysed": 2,
+        "cost_negative": 2,
+        "cost_negative_share": 1.0,
+        "il_risk": 1,
+        "il_estimated": 1,
+        "il_unknown": 0,
+    }
+    for other in ("OP Mainnet", "Base", "Solana"):
+        assert document["chain_summary"][other]["analysed"] == 0
+        assert document["chain_summary"][other]["cost_negative_share"] is None
+
+
+# The summary by chain
+
+# Worked out from the sample: the pools on each chain that advertise an APY, the ones among them
+# with IL risk (from DeFiLlama's ilRisk), and the flags on the pools in the list of `scan --json`.
+SUMMARY_FIELDS = ("analysed", "cost_negative", "il_risk", "il_estimated", "il_unknown")
+SAMPLE_BY_CHAIN = {
+    # chain: analysed, cost-negative, with IL risk, IL estimated, IL unknown
+    "Arbitrum": (12, 2, 6, 4, 2),
+    "OP Mainnet": (11, 2, 4, 1, 3),
+    "Base": (15, 2, 8, 4, 4),
+    "Solana": (15, 6, 6, 0, 6),
+}
+
+
+def test_the_summary_by_chain_of_the_sample(sample, prices_path):
+    document = scan_json(*sample, "--prices-file", str(prices_path), "--limit", "1")
+
+    summary = document["chain_summary"]
+    assert list(summary) == list(SAMPLE_BY_CHAIN)
+    assert {
+        chain: tuple(entry[field] for field in SUMMARY_FIELDS) for chain, entry in summary.items()
+    } == SAMPLE_BY_CHAIN
+    shares = [entry["cost_negative_share"] for entry in summary.values()]
+    assert shares == [0.166667, 0.181818, 0.133333, 0.4]  # 2/12, 2/11, 2/15 and 6/15
+
+
+def test_the_summary_by_chain_agrees_with_the_pools_it_summarises(
+    sample, sample_payload, prices_path
+):
+    document = scan_json(*sample, "--prices-file", str(prices_path), "--limit", "100")
+
+    for chain, summary in document["chain_summary"].items():
+        pools = [pool for pool in document["pools"] if pool["chain"] == chain]
+        raw = sample_pools(sample_payload, chains={chain}, advertising_apy=True)
+        assert summary["analysed"] == len(pools) == len(raw), chain
+        assert summary["cost_negative"] == sum("COST_NEGATIVE" in p["flags"] for p in pools)
+        assert summary["il_risk"] == sum(p["ilRisk"] == "yes" for p in raw)
+        assert summary["il_estimated"] == sum("IL_ESTIMATED" in p["flags"] for p in pools)
+        assert summary["il_unknown"] == sum("IL_UNKNOWN" in p["flags"] for p in pools)
+    for field in SUMMARY_FIELDS:  # and the chains add up to the headline counts
+        total = sum(entry[field] for entry in document["chain_summary"].values())
+        assert total == document["counts"][field], field
+
+
+def test_without_prices_no_chain_has_an_estimate_and_every_risk_is_unknown(sample):
+    document = scan_json(*sample, "--limit", "1")
+
+    for entry in document["chain_summary"].values():
+        assert entry["il_estimated"] == 0
+        assert entry["il_unknown"] == entry["il_risk"]
+
+
+def test_the_text_report_has_the_summary_by_chain(sample, prices_path):
+    result = runner.invoke(
+        app, ["scan", *sample, "--prices-file", str(prices_path), "--limit", "3"]
+    )
+
+    rows = [re.split(r"\s{2,}", line.strip()) for line in by_chain_lines(result.stdout)]
+    assert rows[0] == ["By chain"]
+    assert rows[1] == ["chain", "analysed", "cost-negative", "share", "IL estimated"]
+    assert rows[3:] == [
+        ["Arbitrum", "12", "2", "16.7%", "4 of 6"],
+        ["OP Mainnet", "11", "2", "18.2%", "1 of 4"],
+        ["Base", "15", "2", "13.3%", "4 of 8"],
+        ["Solana", "15", "6", "40.0%", "0 of 6"],
+        ["all chains", "53", "12", "22.6%", "9 of 24"],
+    ]
 
 
 # HTML report
+
+
+def test_report_summarises_the_chains_above_the_pools(sample, prices_path, tmp_path):
+    out = tmp_path / "r.html"
+
+    result = runner.invoke(
+        app,
+        ["report", *sample, "--prices-file", str(prices_path), "--limit", "5", "--out", str(out)],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "12 of 53 analysed are cost-negative" in result.stdout
+    page = out.read_text(encoding="utf-8")
+    assert "Cost-negative: 12. Shown: 5." in page
+    section = page.split("<h2>By chain</h2>")[1].split("<h2>Pools</h2>")[0]
+    assert re.findall(r'<th scope="row">([^<]*)</th>', section) == [*SAMPLE_BY_CHAIN, "all chains"]
+    cells = re.findall(r'<td class="num">([^<]*)</td>', section)
+    assert cells == [
+        *["12", "2", "16.7%", "4 of 6"],
+        *["11", "2", "18.2%", "1 of 4"],
+        *["15", "2", "13.3%", "4 of 8"],
+        *["15", "6", "40.0%", "0 of 6"],
+        *["53", "12", "22.6%", "9 of 24"],
+    ]
+    assert page.split("<h2>Pools</h2>")[1].split("<h2>Flags</h2>")[0].count("<tr") == 5 + 1
 
 
 def test_report_writes_a_self_contained_page(sample, tmp_path):
@@ -678,7 +795,11 @@ def test_report_uses_the_same_options_as_scan(sample, tmp_path):
     assert result.exit_code == 0
     page = out.read_text(encoding="utf-8")
     assert "held 7 days" in page
-    assert page.count("<tr") == 3 + 1  # three pools and the header row
+    pools = page.split("<h2>Pools</h2>")[1].split("<h2>Flags</h2>")[0]
+    assert pools.count("<tr") == 3 + 1  # three pools and the header row
+    by_chain = page.split("<h2>By chain</h2>")[1].split("<h2>Pools</h2>")[0]
+    assert "Base" in by_chain
+    assert "Solana" not in by_chain  # it was not scanned
     assert "Solana" not in page.split("<h2>Flags</h2>")[0]
 
 
@@ -967,6 +1088,7 @@ def test_the_counts_cover_every_pool_when_the_prices_of_the_last_ones_cannot_be_
         "il_estimated": 10,
         "il_unknown": 5,
     }
+    assert document["chain_summary"]["Arbitrum"]["cost_negative_share"] == 0.666667  # 10 of 15
     assert document["notes"] == [
         "Token prices: 10 of 30 coins could not be fetched (HTTP 500).",
         "Impermanent loss is estimated for 10 of the 15 pools with IL risk and two tokens. The "

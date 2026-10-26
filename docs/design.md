@@ -174,8 +174,8 @@ For each pool:
      coin asked for once. That took 10 seconds on a fast connection, and a few minutes on a slow
      one.
    - The pools are ranked with their IL, and then `--only-negative` and `--limit` cut the list.
-     The counts and the order of the pools do not depend on the limit, and `--only-negative` finds
-     a pool that only loses money with its IL.
+     The counts, the summary by chain and the order of the pools do not depend on the limit, and
+     `--only-negative` finds a pool that only loses money with its IL.
    - The coins are asked for in the order of a first ranking without IL (the cost-negative pools
      with the highest advertised APY first), so that if the price service gives out partway, the
      pools at the top of the table are the ones that were estimated.
@@ -188,3 +188,9 @@ For each pool:
      then lower bounds for those pools.
    - `counts.il_risk`, `counts.il_estimated` and `counts.il_unknown` now count all the pools
      analysed, not only the pools shown. The text line says "of the N analysed pools with IL risk".
+2. **A summary by chain.** For each scanned chain (in the order given), the pools analysed, the
+   cost-negative count and its share, and how many of the pools with IL risk have an IL estimate,
+   with a total row. It is in the text output (under the counts), in the JSON (`chain_summary`,
+   keyed by chain, with `cost_negative_share` from 0 to 1 and `null` when nothing was analysed)
+   and in the HTML page, above the table of pools. The pages workflow keeps its command,
+   `report --out site/index.html --limit 100`.

@@ -62,6 +62,16 @@ Solana      raydium-amm   USDC-PHA         $71.0M          0.02+0.00  $3.02    -
 Pools analysed: 53 on Arbitrum, OP Mainnet, Base, Solana. Cost-negative: 12. Shown: 10.
 Left out: 0 under the TVL floor, 8 advertising an APY of 0 or less, 0 unreadable entries in the source.
 Impermanent loss: estimated from token prices for 9 of the 24 analysed pools with IL risk.
+
+By chain
+chain       analysed  cost-negative  share  IL estimated
+----------  --------  -------------  -----  ------------
+Arbitrum          12              2  16.7%        4 of 6
+OP Mainnet        11              2  18.2%        1 of 4
+Base              15              2  13.3%        4 of 8
+Solana            15              6  40.0%        0 of 6
+all chains        53             12  22.6%       9 of 24
+
 Source: file tests/fixtures/pools_sample.json
 Prices: file tests/fixtures/prices_sample.json
 Sorted with cost-negative pools first, the highest advertised APY leading, then the other pools by net APY, highest first.
@@ -93,7 +103,9 @@ token, and seven have a token with no prices in the saved file.
 The lines under the table count all 53 pools, not only the 10 shown: `--limit` cuts the table and
 nothing else. The impermanent loss of every pool whose tokens are in the saved prices is estimated
 first (9 of the 24 with IL risk), and only then is the list ranked and cut, so the counts and the
-order do not depend on the limit.
+order do not depend on the limit. The table by chain splits the totals: Solana has the largest
+share of cost-negative pools, 6 of its 15, and no estimate at all, because the saved prices are
+of tokens on the other chains.
 
 A sample report built from the same data is in [`docs/report.html`](docs/report.html).
 
@@ -125,7 +137,7 @@ what it is doing on stderr. A run with `--from-file` makes no requests at all.
 | `--days N` | 30 | Holding period, in whole days. |
 | `--haircut H` | 0.5 | Share of the reward APY assumed lost, from 0 to 1. |
 | `--min-tvl USD` | 100000 | Leave out pools with less TVL than this. |
-| `--limit N` | 50 | Show at most this many pools. The counts always cover every pool analysed. |
+| `--limit N` | 50 | Show at most this many pools. The counts and the summary by chain always cover every pool analysed. |
 | `--only-negative` | off | Show only `COST_NEGATIVE` pools. |
 | `--include-zero-apy` | off | Also show pools that advertise an APY of 0 or less. They are left out by default: they mislead nobody. |
 | `--json` | off | Print JSON instead of the table (`scan` only). |
@@ -196,7 +208,9 @@ lower bounds for those pools. If the pools call fails, the tool stops with an er
 `scan --json` prints one JSON document: `source` and `price_source`, `assumptions`, `chain_costs`
 (the cost of one transaction per chain and where each input came from), `counts` (the pools
 analysed, how many are cost-negative and how many are shown, and of all the pools analysed how
-many have IL risk, an estimated IL or none), `notes` and `pools`. Each pool has `pool`
+many have IL risk, an estimated IL or none), `chain_summary` (the same counts for each chain, and
+`cost_negative_share`, a fraction from 0 to 1 that is `null` when no pool was analysed), `notes`
+and `pools`. Each pool has `pool`
 (the DeFiLlama id), `chain`, `project`, `symbol`, `tvl_usd`, `apy`, `apy_base`, `apy_reward`,
 `gross_usd`, `gas_usd`, `swap_usd`, `il_usd`, `costs_usd`, `net_usd`, `net_apy`,
 `break_even_size_usd`, `break_even_days`, `il_volatility`, `flags`, `reward_tokens` and
@@ -209,10 +223,10 @@ there is none.
 publishes it at <https://agamemnon-coder.github.io/defi-risk-tools/>. It runs every day at 06:17
 UTC, on every push to `main`, and on demand (Actions → Pages → Run workflow). It runs
 `yield-scan report --out site/index.html --limit 100`, so the page shows the 100 most misleading
-pools, with the default assumptions, but its summary counts every pool analysed. The build looks
-up prices for all of them (83 requests when this was written). If the pools cannot be fetched the
-build fails and the previous page stays up; if only the prices cannot be fetched, the page is
-built without those estimates and says so in its notes.
+pools, with the default assumptions, but its summary and its table by chain count every pool
+analysed. The build looks up prices for all of them (83 requests when this was written). If the
+pools cannot be fetched the build fails and the previous page stays up; if only the prices cannot
+be fetched, the page is built without those estimates and says so in its notes.
 
 To publish your own copy from a fork, turn it on once under Settings → Pages → Source: GitHub
 Actions.
@@ -263,7 +277,7 @@ they live in `Assumptions` in `src/defi_risk_tools/model.py` and the cost table 
 | Cost of one Solana transaction | A fixed 0.00005 SOL (ten times the 5,000 lamport base fee, to leave room for a priority fee) times the price of SOL. |
 | Swaps | A single-asset pool (`exposure` = `single`) needs no swap, whatever the asset: you are assumed to hold it. A multi-asset pool takes a mix of tokens, so half of the position is swapped into the others on the way in and swapped back on the way out: `2 × 0.3% × P × 0.5`. An exposure that is missing or unknown counts as multi-asset. The 0.3% (swap fee plus slippage) and the one half are flat: they do not depend on the token, the pool's depth or your size, and one half is exact only for a pool of two tokens at equal weights. |
 | Impermanent loss | Only for pools with `ilRisk` = yes. If DeFiLlama has a 7-day figure `il7d` (it had none for any pool when this was written), it is scaled linearly to the holding period: `P × \|il7d\|/100 × T/7`. Otherwise, if the pool holds exactly two tokens with prices, it is **estimated**: take 30 days of daily prices of both tokens, the daily log returns of their price ratio, and their sample standard deviation times √365 (σ). The expected loss is then `P × σ² × T/365 / 8`, the small-move result for a 50/50 constant-product pool. Both are capped at 50% of P. The estimate assumes that the volatility of the last 30 days continues, needs at least 14 daily returns, and is a **lower bound for concentrated-liquidity pools** (Uniswap v3 and v4, Velodrome v3 and similar), whose positions can leave their range. With no figure and no estimate, no IL cost is added and the pool is flagged `IL_UNKNOWN`. |
-| Prices are looked up for every pool analysed | Impermanent loss is estimated for every pool that passes the filters, not only for the ones shown, and the pools are ranked after that. `--only-negative` and `--limit` then cut the ranked list. So the counts and the order do not depend on the limit, and a pool that only loses money once IL is counted is found by `--only-negative`. The price of this is the lookups of a live run: 83 requests when this was written. |
+| Prices are looked up for every pool analysed | Impermanent loss is estimated for every pool that passes the filters, not only for the ones shown, and the pools are ranked after that. `--only-negative` and `--limit` then cut the ranked list. So the counts, the summary by chain and the order do not depend on the limit, and a pool that only loses money once IL is counted is found by `--only-negative`. The price of this is the lookups of a live run: 83 requests when this was written. |
 | What is not counted | Deposit or withdrawal fees that are not already in the APY, price impact, bridging, Solana account rent, taxes, lockups, depegs and smart contract risk. |
 | Net APY | One-off costs annualised: a loss of $3 on $1,000 over 30 days is shown as −3.7% a year. Short holds therefore look more extreme than long ones. |
 | TVL floor | Pools with less than $100,000 TVL are left out (`--min-tvl`). |

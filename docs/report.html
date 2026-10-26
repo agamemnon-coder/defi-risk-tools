@@ -24,10 +24,13 @@ a{color:var(--link)}
 .notice{background:var(--note-bg);color:var(--note);border:1px solid var(--line);
 border-radius:8px;padding:10px 14px}
 .table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px}
+.table-wrap.narrow{max-width:44rem}
 table{border-collapse:collapse;width:100%;font-size:.875rem}
 th,td{padding:8px 10px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
 thead th{background:var(--panel);vertical-align:bottom}
-tbody tr:last-child td{border-bottom:0}
+tbody tr:last-child td,tbody tr:last-child th{border-bottom:0}
+tfoot th,tfoot td{background:var(--panel);font-weight:600;border-top:1px solid var(--line);
+border-bottom:0}
 tr.cost-negative td:first-child{box-shadow:inset 3px 0 0 var(--neg)}
 .num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 small{display:block;color:var(--muted);font-size:.75rem}
@@ -46,7 +49,8 @@ ul{margin:0;padding-left:20px}
 li{margin-bottom:6px}
 footer{color:var(--muted);font-size:.85rem;margin-top:32px}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-@media (max-width:640px){dl{grid-template-columns:1fr}dd{margin-bottom:8px}}
+@media (max-width:640px){dl{grid-template-columns:1fr}dd{margin-bottom:8px}
+.narrow th,.narrow td{padding:8px 6px}.narrow thead .num{white-space:normal}}
 </style>
 </head>
 <body>
@@ -60,6 +64,19 @@ fall of reward tokens and impermanent loss.</p>
 <main>
 <h2>Summary</h2>
 <p>Pools analysed: 53 on Arbitrum, OP Mainnet, Base, Solana. Cost-negative: 12. Shown: 50. Left out: 0 under the TVL floor, 8 advertising an APY of 0 or less, 0 unreadable entries in the source. Impermanent loss: estimated from token prices for 9 of the 24 analysed pools with IL risk.</p>
+<h2>By chain</h2>
+<div class="table-wrap narrow"><table>
+<caption class="sr">Pools analysed and cost-negative, by chain</caption>
+<thead><tr><th scope="col">Chain</th><th scope="col" class="num">Analysed</th><th scope="col" class="num">Cost-negative</th><th scope="col" class="num">Share</th><th scope="col" class="num">IL estimated</th></tr></thead>
+<tbody>
+<tr><th scope="row">Arbitrum</th><td class="num">12</td><td class="num">2</td><td class="num">16.7%</td><td class="num">4 of 6</td></tr>
+<tr><th scope="row">OP Mainnet</th><td class="num">11</td><td class="num">2</td><td class="num">18.2%</td><td class="num">1 of 4</td></tr>
+<tr><th scope="row">Base</th><td class="num">15</td><td class="num">2</td><td class="num">13.3%</td><td class="num">4 of 8</td></tr>
+<tr><th scope="row">Solana</th><td class="num">15</td><td class="num">6</td><td class="num">40.0%</td><td class="num">0 of 6</td></tr>
+</tbody>
+<tfoot><tr><th scope="row">all chains</th><td class="num">53</td><td class="num">12</td><td class="num">22.6%</td><td class="num">9 of 24</td></tr></tfoot>
+</table></div>
+<h2>Pools</h2>
 <p>Sorted with cost-negative pools first, the highest advertised APY leading, then the other pools by net APY, highest first. Position $1,000, held 30 days.</p>
 <div class="table-wrap"><table>
 <caption class="sr">Pools, cost-negative first</caption>
