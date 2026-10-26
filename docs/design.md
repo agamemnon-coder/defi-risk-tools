@@ -142,3 +142,23 @@ For each pool:
    - **Offline:** `--from-file` makes no network calls. `--prices-file` is a saved chart response
      for offline runs; without it IL stays unknown. `tests/fixtures/prices_sample.json` is one,
      for the major tokens of the fixture's pools.
+
+## v1.2 changes
+
+1. **A fairer swap model.** v1 charged a swap on every pool except a single-asset stablecoin pool.
+   A live run found 1,135 of 1,947 pools cost-negative, mostly because of those swaps, but a
+   WETH holder does not swap to lend WETH on Aave. The rule is now:
+   - `exposure == "single"` (any asset): no swap. The user is assumed to hold the asset.
+   - Multi-asset pools: half of the position is swapped each way, so `2 × rate × P × 0.5`
+     (`Assumptions.multi_asset_swap_share`, default 0.5).
+   - An exposure that is missing or unknown counts as multi-asset.
+
+   The `stablecoin` field no longer affects the model. On the saved 2026-10-26 snapshot (an
+   offline run, without impermanent loss estimates) the cost-negative pools go from 1,137 to 793 of
+   1,949, and on the fixture from 19 to 12 of 53.
+2. **A daily live report on GitHub Pages.** `.github/workflows/pages.yml` runs every day at 06:17
+   UTC, on every push to `main` and on demand. It runs `yield-scan report --out site/index.html
+   --limit 100` with live data and deploys the `site` folder with `actions/upload-pages-artifact`
+   and `actions/deploy-pages` (permissions `contents: read`, `pages: write` and `id-token: write`;
+   concurrency group `pages`; environment `github-pages`). A fork turns it on under
+   Settings > Pages > Source: GitHub Actions.

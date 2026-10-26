@@ -242,9 +242,11 @@ def test_json_puts_cost_negative_pools_first_by_advertised_apy_then_the_rest_by_
 def test_the_most_misleading_pools_of_the_sample_lead(sample):
     pools = scan_json(*sample, "--limit", "3")["pools"]
 
-    # They advertise 8.24%, 6.77% and 4.67%, and each of them loses money after costs.
-    assert [pool["symbol"] for pool in pools] == ["USD.INFRA", "ETH-USDC", "GROVE-STEAKUSDC"]
-    assert [pool["apy"] for pool in pools] == pytest.approx([8.24, 6.77, 4.67], abs=0.005)
+    # They advertise 3.00%, 2.54% and 1.28%, and each of them loses money after costs: two
+    # multi-asset pools and a stable pair, each of which swaps half of the position in and out.
+    assert [pool["symbol"] for pool in pools] == ["KPK-EURE-YIELD", "WBTC.B-USDC", "USDC-ZCHF"]
+    assert [pool["apy"] for pool in pools] == pytest.approx([3.00, 2.54, 1.28], abs=0.005)
+    assert all(pool["swap_usd"] == pytest.approx(3.0) for pool in pools)
     assert all("COST_NEGATIVE" in pool["flags"] and pool["net_usd"] < 0 for pool in pools)
 
 
@@ -321,6 +323,60 @@ def test_json_every_il_risk_pool_in_the_sample_is_also_il_unknown(sample):
     assert all("IL_UNKNOWN" in pool["flags"] and pool["il_usd"] == 0 for pool in il_risk)
 
 
+# Swaps
+
+
+def sample_pool_json(*args, chain, project, symbol) -> dict:
+    pools = scan_json(*args, "--limit", "100")["pools"]
+    return next(
+        p for p in pools if (p["chain"], p["project"], p["symbol"]) == (chain, project, symbol)
+    )
+
+
+def test_lending_a_volatile_token_you_hold_needs_no_swap(sample):
+    # Aave v3 WETH on Base is a single-asset pool: a WETH holder does not swap to lend WETH.
+    # It advertises 1.39% + 1.86% of rewards: 1000 * (1.39067% + 1.86028% * 0.5) * 30/365 = $1.91.
+    # Four transactions (approve, deposit, withdraw and a claim) cost 4 * $0.02345 = $0.09.
+    weth = sample_pool_json(*sample, chain="Base", project="aave-v3", symbol="WETH")
+
+    assert weth["swap_usd"] == 0
+    assert weth["gross_usd"] == pytest.approx(1.9075, abs=1e-4)
+    assert weth["gas_usd"] == pytest.approx(0.0938)
+    assert weth["net_usd"] == pytest.approx(1.9075 - 0.0938, abs=1e-4)  # +$1.81
+    assert weth["net_apy"] == pytest.approx(2.2067, abs=1e-4)
+    assert "COST_NEGATIVE" not in weth["flags"]
+    # gas / (yield per dollar over 30 days) = 0.0938 / (0.0232081 * 30/365) = $49.17
+    assert weth["break_even_size_usd"] == pytest.approx(49.17, abs=0.01)
+    assert weth["break_even_days"] == 2
+
+
+def test_a_multi_asset_pool_swaps_half_the_position_each_way(sample):
+    # Uniswap v3 USDC-ZCHF on OP Mainnet advertises 1.28317%: 1000 * 1.28317% * 30/365 = $1.05.
+    # Three transactions cost 3 * $0.020575 = $0.06. Half of the position, $500, is swapped on the
+    # way in and swapped back on the way out, at 0.3%: 2 * 0.3% * $500 = $3.00.
+    pair = sample_pool_json(*sample, chain="OP Mainnet", project="uniswap-v3", symbol="USDC-ZCHF")
+
+    assert pair["swap_usd"] == pytest.approx(3.0)
+    assert pair["gross_usd"] == pytest.approx(1.0547, abs=1e-4)
+    assert pair["gas_usd"] == pytest.approx(0.061725)
+    assert pair["net_usd"] == pytest.approx(1.0547 - 0.061725 - 3.0, abs=1e-4)  # -$2.01
+    assert pair["net_apy"] == pytest.approx(-2.4419, abs=1e-4)
+    assert "COST_NEGATIVE" in pair["flags"]
+    assert pair["break_even_size_usd"] is None  # 0.1% of yield per dollar against 0.3% of swaps
+    # 1000 * 1.28317% * T/365 >= 3.061725 first holds at T = 88 (T = 87: 3.0585, T = 88: 3.0937)
+    assert pair["break_even_days"] == 88
+
+
+def test_the_swap_rule_applies_to_the_whole_sample(sample, sample_payload):
+    pools = scan_json(*sample, "--limit", "100", "--include-zero-apy")["pools"]
+    exposure = {raw["pool"]: raw["exposure"] for raw in sample_payload["data"]}
+
+    assert len(pools) == 61
+    for pool in pools:
+        expected = 0.0 if exposure[pool["pool"]] == "single" else 3.0
+        assert pool["swap_usd"] == pytest.approx(expected), (pool["chain"], pool["symbol"])
+
+
 # Impermanent loss from token prices
 
 
@@ -350,7 +406,7 @@ def pools_by_name(document) -> dict:
 
 
 def test_a_prices_file_gives_the_pools_shown_an_estimated_il(sample, prices_path):
-    document = scan_json(*sample, "--prices-file", str(prices_path), "--limit", "10")
+    document = scan_json(*sample, "--prices-file", str(prices_path), "--limit", "100")
 
     pools = pools_by_name(document)
     eth_usdc = pools[("Arbitrum", "ETH-USDC")]
@@ -361,15 +417,18 @@ def test_a_prices_file_gives_the_pools_shown_an_estimated_il(sample, prices_path
     assert eth_usdc["costs_usd"] == pytest.approx(
         eth_usdc["gas_usd"] + eth_usdc["swap_usd"] + eth_usdc["il_usd"]
     )
+    # It advertises 6.77%: $5.56 of yield, less $0.09 of gas, $3.00 of swaps and $1.64 of IL.
+    assert eth_usdc["net_usd"] == pytest.approx(0.83, abs=0.005)
+    assert "COST_NEGATIVE" not in eth_usdc["flags"]
     wbtc_usdc = pools[("Arbitrum", "WBTC.B-USDC")]
     assert wbtc_usdc["il_volatility"] == pytest.approx(0.259566, abs=1e-6)  # WBTC / USDC
     assert wbtc_usdc["il_usd"] == pytest.approx(0.6922, abs=1e-4)
     assert document["price_source"] == f"file {prices_path}"
-    assert document["counts"]["il_estimated"] == 2
+    assert document["counts"]["il_estimated"] == 9
 
 
 def test_pools_that_cannot_be_estimated_stay_unknown(sample, prices_path):
-    document = scan_json(*sample, "--prices-file", str(prices_path), "--limit", "10")
+    document = scan_json(*sample, "--prices-file", str(prices_path), "--limit", "100")
 
     pools = pools_by_name(document)
     one_token = pools[("Base", "GROVE-STEAKUSDC")]
@@ -379,8 +438,11 @@ def test_pools_that_cannot_be_estimated_stay_unknown(sample, prices_path):
         assert "IL_UNKNOWN" in pool["flags"]
         assert pool["il_usd"] == 0
         assert pool["il_volatility"] is None
-    assert document["counts"]["il_unknown"] == 3  # those two and KPK-EURE-YIELD (one token)
-    assert any("not estimated for 1 pool" in note for note in document["notes"])
+    counts = document["counts"]
+    at_risk = [pool for pool in document["pools"] if "IL_RISK" in pool["flags"]]
+    assert counts["il_estimated"] + counts["il_unknown"] == len(at_risk) == 24
+    assert counts["il_unknown"] == 15  # 3 hold a single token, 12 hold two that have no prices
+    assert any("not estimated for 12 pools" in note for note in document["notes"])
 
 
 def test_estimating_il_does_not_change_which_pools_are_shown(sample, prices_path):
@@ -396,11 +458,11 @@ def test_estimating_il_does_not_change_which_pools_are_shown(sample, prices_path
 
 def test_the_text_report_says_how_much_il_was_estimated(sample, prices_path):
     result = runner.invoke(
-        app, ["scan", *sample, "--prices-file", str(prices_path), "--limit", "10"]
+        app, ["scan", *sample, "--prices-file", str(prices_path), "--limit", "100"]
     )
 
     assert (
-        "Impermanent loss: estimated from token prices for 2 of the 5 pools shown" in result.stdout
+        "Impermanent loss: estimated from token prices for 9 of the 24 pools shown" in result.stdout
     )
     assert f"Prices: file {prices_path}" in result.stdout
     assert "IL_ESTIMATED" in result.stdout
@@ -450,21 +512,19 @@ def test_a_missing_prices_file_is_a_usage_error(sample):
 def flip_files(tmp_path, sample_payload):
     """Two pools and prices for them, made so that the numbers can be worked out by hand.
 
-    "lp" advertises 8% and holds two tokens, one of which swings by +-2% a day. "plain" advertises
-    3% and has no impermanent loss risk.
+    "lp" advertises 4.5% and holds two tokens, one of which swings by +-2% a day. "plain" is a
+    multi-asset pool without impermanent loss risk that advertises 2%.
     """
     lp = raw_pool(
         sample_payload,
         pool="lp",
         symbol="A-B",
-        apy=8.0,
-        apyBase=8.0,
+        apy=4.5,
+        apyBase=4.5,
         ilRisk="yes",
         underlyingTokens=["0xAAA", "0xbbb"],
     )
-    plain = raw_pool(
-        sample_payload, pool="plain", symbol="PLAIN", apy=3.0, apyBase=3.0, exposure="single"
-    )
+    plain = raw_pool(sample_payload, pool="plain", symbol="PLAIN", apy=2.0, apyBase=2.0)
     swings = prices_with_returns([0.02, -0.02] * 14)  # 28 daily returns: 14 up and 14 down
     prices = chart({"arbitrum:0xaaa": swings, "arbitrum:0xbbb": [1.0] * 29})
     return [
@@ -476,8 +536,9 @@ def flip_files(tmp_path, sample_payload):
 
 
 def test_il_can_turn_a_pool_cost_negative_and_move_it_to_the_top(flip_files):
-    # Arbitrum costs $0.0315 a transaction, so gas is 3 * 0.0315 = $0.0945 and the swaps $6.00.
-    # "lp" pays 1000 * 8% * 30/365 = $6.5753: +$0.48 before impermanent loss.
+    # Arbitrum costs $0.0315 a transaction, so gas is 3 * 0.0315 = $0.0945. A multi-asset pool
+    # swaps half of the position each way: 2 * 0.3% * $1,000 * 0.5 = $3.00.
+    # "lp" pays 1000 * 4.5% * 30/365 = $3.6986: +$0.60 before impermanent loss.
     # The ratio of its tokens moves +-2% a day, 28 times: the mean is 0 and the sample variance is
     # 28 * 0.02**2 / 27, so over 30 days IL = 1000 * 0.02**2 * (28/27) * 30 / 8 = $1.5556.
     document = scan_json(*flip_files)
@@ -485,8 +546,9 @@ def test_il_can_turn_a_pool_cost_negative_and_move_it_to_the_top(flip_files):
     lp, plain = document["pools"]
     assert (lp["pool"], plain["pool"]) == ("lp", "plain")  # it advertises more, so it leads
     assert lp["flags"] == ["COST_NEGATIVE", "IL_RISK", "IL_ESTIMATED"]
+    assert lp["swap_usd"] == pytest.approx(3.0)
     assert lp["il_usd"] == pytest.approx(1000 * 0.02**2 * (28 / 27) * 30 / 8)
-    assert lp["net_usd"] == pytest.approx(6.5753 - 0.0945 - 6.0 - 1.5556, abs=1e-4)
+    assert lp["net_usd"] == pytest.approx(3.6986 - 0.0945 - 3.0 - 1.5556, abs=1e-4)  # -$0.95
     assert document["counts"]["cost_negative"] == 2  # both lose money now
 
 
@@ -559,12 +621,12 @@ def test_report_with_a_prices_file_shows_the_estimated_il(sample, prices_path, t
 
     result = runner.invoke(
         app,
-        ["report", *sample, "--prices-file", str(prices_path), "--limit", "10", "--out", str(out)],
+        ["report", *sample, "--prices-file", str(prices_path), "--limit", "100", "--out", str(out)],
     )
 
     assert result.exit_code == 0, result.stderr
     page = out.read_text(encoding="utf-8")
-    assert page.count("IL est.") == 2
+    assert page.count("IL est.") == 9
     assert "IL_ESTIMATED" in page
     assert f"Prices: file {prices_path}" in page
     assert "lower bound" in page
@@ -638,15 +700,27 @@ def test_without_a_file_the_pools_and_costs_come_from_the_public_endpoints(live,
     assert hosts == {"yields.llama.fi", "coins.llama.fi", "arb1.arbitrum.io"}
 
 
-def test_token_prices_come_from_the_chart_endpoint_and_nothing_is_noted(live, sample_payload):
-    weth, usdc = (
-        "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
-        "0xAF88d065e77c8cC2239327C5EDb3A432268e5831",  # as DeFiLlama writes it: mixed case
-    )
+WETH_ADDRESS = "0x82af49447d8a07e3bd95bd0d56f35241523fbab1"
+USDC_ADDRESS = "0xAF88d065e77c8cC2239327C5EDb3A432268e5831"  # as DeFiLlama writes it: mixed case
+
+
+def serve_one_pool_with_two_priced_tokens(live, sample_payload) -> None:
+    """Make the live pools endpoint answer with WETH/USDC on Arbitrum: its prices are saved."""
     eth_usdc = raw_pool(
-        sample_payload, pool="eth-usdc", symbol="ETH-USDC", apy=8.0, apyBase=8.0, ilRisk="yes"
+        sample_payload,
+        pool="eth-usdc",
+        symbol="ETH-USDC",
+        apy=8.0,
+        apyBase=8.0,
+        ilRisk="yes",
+        underlyingTokens=[WETH_ADDRESS, USDC_ADDRESS],
     )
-    live.pools.respond(json={"data": [{**eth_usdc, "underlyingTokens": [weth, usdc]}]})
+    live.pools.respond(json={"data": [eth_usdc]})
+
+
+def test_token_prices_come_from_the_chart_endpoint_and_nothing_is_noted(live, sample_payload):
+    weth, usdc = WETH_ADDRESS, USDC_ADDRESS
+    serve_one_pool_with_two_priced_tokens(live, sample_payload)
 
     document = scan_json()
 
@@ -689,13 +763,17 @@ def test_a_saved_prices_file_replaces_the_chart_endpoint(live, prices_path):
     assert document["counts"]["il_estimated"] >= 1
 
 
-def test_a_failing_chart_endpoint_does_not_stop_the_scan_and_the_output_says_so(live):
+def test_a_failing_chart_endpoint_does_not_stop_the_scan_and_the_output_says_so(
+    live, sample_payload
+):
+    serve_one_pool_with_two_priced_tokens(live, sample_payload)
     live.chart.route.mock(side_effect=lambda request: httpx.Response(503))
 
-    document = scan_json("--limit", "2")
+    document = scan_json()
 
     assert document["counts"]["il_estimated"] == 0
-    assert document["counts"]["il_unknown"] >= 1
+    assert document["counts"]["il_unknown"] == 1
+    assert [pool["symbol"] for pool in document["pools"]] == ["ETH-USDC"]  # it is still shown
     assert document["notes"] == ["Token prices: 2 of 2 coins could not be fetched (HTTP 503)."]
     assert live.chart.route.call_count == 2  # the request, and one retry
 
