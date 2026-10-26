@@ -59,7 +59,7 @@ fall of reward tokens and impermanent loss.</p>
 </header>
 <main>
 <h2>Summary</h2>
-<p>Pools analysed: 53 on Arbitrum, OP Mainnet, Base, Solana. Cost-negative: 12. Shown: 50. Left out: 0 under the TVL floor, 8 advertising an APY of 0 or less, 0 unreadable entries in the source. Impermanent loss: estimated from token prices for 9 of the 23 pools shown with IL risk.</p>
+<p>Pools analysed: 53 on Arbitrum, OP Mainnet, Base, Solana. Cost-negative: 12. Shown: 50. Left out: 0 under the TVL floor, 8 advertising an APY of 0 or less, 0 unreadable entries in the source. Impermanent loss: estimated from token prices for 9 of the 24 analysed pools with IL risk.</p>
 <p>Sorted with cost-negative pools first, the highest advertised APY leading, then the other pools by net APY, highest first. Position $1,000, held 30 days.</p>
 <div class="table-wrap"><table>
 <caption class="sr">Pools, cost-negative first</caption>
@@ -135,7 +135,7 @@ fall of reward tokens and impermanent loss.</p>
 <dt>Yield</dt><dd>simple, not compounded; the APY is assumed to stay constant</dd>
 <dt>Transactions</dt><dd>2 to enter, 1 to exit, and 1 claim per started 30 days when the pool pays rewards</dd>
 <dt>Swaps</dt><dd>none for a single-asset pool: you are assumed to hold its asset. A multi-asset pool (or one of unknown exposure) swaps 50% of the position on the way in and back on the way out, at 0.30% (swap fee + slippage)</dd>
-<dt>Impermanent loss</dt><dd>DeFiLlama&#x27;s 7-day figure if there is one. Otherwise, for pools with two tokens, volatility^2 x T/365 / 8 of the position, from 30 days of daily prices (a 50/50 constant-product pool; a lower bound for concentrated liquidity). Capped at 50% of the position, and not counted when neither exists. Prices are looked up only for the pools shown.</dd>
+<dt>Impermanent loss</dt><dd>DeFiLlama&#x27;s 7-day figure if there is one. Otherwise, for pools with two tokens, volatility^2 x T/365 / 8 of the position, from 30 days of daily prices (a 50/50 constant-product pool; a lower bound for concentrated liquidity). Capped at 50% of the position, and not counted when neither exists. Prices are looked up for every pool analysed, not only the pools shown.</dd>
 <dt>TVL floor</dt><dd>pools under $100,000 are left out</dd>
 <dt>Zero-APY pools</dt><dd>left out: they advertise nothing, so they mislead nobody (--include-zero-apy)</dd>
 </dl>
@@ -149,14 +149,14 @@ fall of reward tokens and impermanent loss.</p>
 <h2>Notes</h2>
 <ul>
 <li>Offline run: no network calls were made. Gas prices and native token prices are the defaults from the cost table.</li>
-<li>Impermanent loss is not estimated for 12 pools: no usable daily prices for one of their two tokens (IL_UNKNOWN).</li>
+<li>Impermanent loss is estimated for 9 of the 21 pools with IL risk and two tokens. The other 12 stay IL_UNKNOWN: no usable daily prices for one or both of their two tokens.</li>
 </ul>
 <h2>Limitations</h2>
 <ul>
 <li>These numbers come from a simple model. They are estimates, not predictions, and not financial advice.</li>
 <li>The pool data comes from DeFiLlama and is only as good as what protocols and DeFiLlama report. APYs change every day.</li>
 <li>Impermanent loss is estimated, not measured. DeFiLlama&#x27;s own 7-day figure (il7d) was empty for every pool when this tool was written, so for pools with IL risk and exactly two tokens it is estimated from 30 days of daily prices: volatility squared times T/365 over 8, the small-move result for a 50/50 constant-product pool. For concentrated-liquidity pools (Uniswap v3 and v4, Velodrome v3 and similar) it is a lower bound. Pools with another number of tokens, or without prices, stay IL_UNKNOWN and their net APY is optimistic.</li>
-<li>Prices are only looked up for the pools shown (after the filters and the limit), so a pool that loses money only once impermanent loss is counted can be missing from a short list. A larger limit widens it.</li>
+<li>Prices are looked up for every pool analysed, not only the pools shown, so the counts and the order do not depend on the limit. A pool whose tokens have no usable prices, or whose prices could not be fetched, stays IL_UNKNOWN: no loss is counted for it, so the cost-negative counts are lower bounds for such pools.</li>
 <li>Gas and L1 data fees are rough estimates. Swap cost is a flat rate, not a price-impact model, and a single-asset pool is assumed to need no swap because you already hold its asset: if you must buy it first, that swap is not counted.</li>
 <li>The reward haircut is a rule of thumb, not a forecast of any token&#x27;s price.</li>
 <li>Smart contract risk, depegs, taxes, bridge costs and withdrawal limits are not modelled.</li>

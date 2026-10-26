@@ -9,7 +9,7 @@ from html_tools import inspect_page
 
 from defi_risk_tools import report
 from defi_risk_tools.costs import resolve_tx_costs
-from defi_risk_tools.model import Assumptions, evaluate_pool, rank
+from defi_risk_tools.model import Assumptions, evaluate_pool, rank, summarise_chains
 from defi_risk_tools.report import Scan
 
 DEFILLAMA = "https://defillama.com/"
@@ -18,16 +18,22 @@ FORBIDDEN_TAGS = {"script", "link", "img", "iframe", "object", "embed", "video",
 
 @pytest.fixture
 def build_scan(make_pool):
-    """Turn pools into a `Scan` the way the CLI does, with the default costs."""
+    """Turn pools into a `Scan` the way the CLI does, with the default costs.
 
-    def build(pools, notes=None) -> Scan:
+    All the pools are counted; only the first `limit` of them (best first) are shown.
+    """
+
+    def build(pools, notes=None, chains=("Arbitrum",), limit=None) -> Scan:
         assumptions = Assumptions()
-        tx_costs, cost_notes = resolve_tx_costs(["Arbitrum"], client=None)
+        tx_costs, cost_notes = resolve_tx_costs(list(chains), client=None)
         results = rank(
-            [evaluate_pool(pool, assumptions, tx_costs["Arbitrum"].usd) for pool in pools]
+            [
+                evaluate_pool(pool, assumptions, tx_costs.get(pool.chain, tx_costs[chains[0]]).usd)
+                for pool in pools
+            ]
         )
         return Scan(
-            rows=results,
+            rows=results[:limit],
             assumptions=assumptions,
             min_tvl_usd=100_000.0,
             include_zero_apy=False,
@@ -36,6 +42,7 @@ def build_scan(make_pool):
             price_source="a prices test",
             analysed=len(results),
             cost_negative=sum(result.cost_negative for result in results),
+            chain_summaries=summarise_chains(results, list(chains)),
             below_min_tvl=0,
             zero_apy=0,
             skipped_entries=0,
@@ -221,7 +228,7 @@ def test_json_leaves_gas_fields_empty_on_a_fixed_fee_chain(make_pool):
     scan = Scan(
         rows=[], assumptions=Assumptions(), min_tvl_usd=0.0, include_zero_apy=True,
         tx_costs=tx_costs, source="t", price_source="p", analysed=0, cost_negative=0,
-        below_min_tvl=0, zero_apy=0, skipped_entries=0, notes=[],
+        chain_summaries=[], below_min_tvl=0, zero_apy=0, skipped_entries=0, notes=[],
     )  # fmt: skip
 
     solana = json.loads(report.render_json(scan))["chain_costs"]["Solana"]
@@ -341,7 +348,10 @@ def test_the_il_coverage_counts_what_was_estimated_among_the_pools_with_il_risk(
 def test_the_text_report_says_how_many_pools_have_an_estimated_il(mixed_il_scan):
     text = report.render_text(mixed_il_scan)
 
-    assert "Impermanent loss: estimated from token prices for 1 of the 2 pools shown" in text
+    assert (
+        "Impermanent loss: estimated from token prices for 1 of the 2 analysed pools with IL risk."
+        in text
+    )
     assert "Prices: a prices test" in text
 
 
@@ -378,4 +388,69 @@ def test_the_limitations_say_what_the_estimate_is_and_is_not():
     assert "50/50 constant-product pool" in text
     assert "lower bound" in text
     assert "Uniswap v3 and v4, Velodrome v3" in text
-    assert "only looked up for the pools shown" in text
+    assert "looked up for every pool analysed, not only the pools shown" in text
+    assert "the counts and the order do not depend on the limit" in text
+    assert "cost-negative counts are lower bounds" in text
+
+
+# Counts that cover every pool, whatever is shown
+
+
+@pytest.fixture
+def three_chain_scan(build_scan, make_pool):
+    """Six pools on two of the three chains scanned, of which only the first two are shown.
+
+    By hand, for $1,000 held 30 days (gas is $0.0945 on Arbitrum and $0.07035 on Base for three
+    transactions, a multi-asset pool swaps $3.00, and IL at a volatility of 0.4 is
+    1000 * 0.4**2 * (30/365) / 8 = $1.64):
+    a1 pays 5% on one asset: +$4.02.  a2 pays 2% and swaps: 1.64 - 0.09 - 3.00 = -$1.45.
+    a3 pays 20%: 16.44 - 0.09 - 3.00 - 1.64 = +$11.70, with an estimated IL.
+    a4 is a2 with IL risk and no estimate: -$1.45.  b1 pays 1% and swaps: -$2.25.  b2 pays 1% on
+    one asset: +$0.75.
+    """
+    multi = {"stablecoin": False, "exposure": "multi"}
+    pools = [
+        make_pool(pool_id="a1", apy_base=5.0),
+        make_pool(pool_id="a2", apy_base=2.0, **multi),
+        make_pool(pool_id="a3", apy_base=20.0, il_risk=True, il_volatility=0.4, **multi),
+        make_pool(pool_id="a4", apy_base=2.0, il_risk=True, **multi),
+        make_pool(pool_id="b1", chain="Base", apy_base=1.0, **multi),
+        make_pool(pool_id="b2", chain="Base", apy_base=1.0),
+    ]
+    return build_scan(pools, chains=("Arbitrum", "Base", "Solana"), limit=2)
+
+
+def test_the_text_report_counts_every_pool_whatever_is_shown(three_chain_scan):
+    lines = report.render_text(three_chain_scan).splitlines()
+
+    assert "Pools analysed: 6 on Arbitrum, Base, Solana. Cost-negative: 3. Shown: 2." in lines
+    assert (
+        "Impermanent loss: estimated from token prices for 1 of the 2 analysed pools with IL risk."
+        in lines
+    )
+
+
+def test_json_counts_the_il_of_every_pool_analysed_and_not_only_of_the_pools_shown(
+    three_chain_scan,
+):
+    document = json.loads(report.render_json(three_chain_scan))
+
+    assert document["counts"] == {
+        "analysed": 6,
+        "cost_negative": 3,
+        "shown": 2,
+        "below_min_tvl": 0,
+        "zero_apy": 0,
+        "skipped_entries": 0,
+        "il_risk": 2,
+        "il_estimated": 1,
+        "il_unknown": 1,
+    }
+    assert len(document["pools"]) == 2
+
+
+def test_html_summary_counts_every_pool_whatever_is_shown(three_chain_scan):
+    page = report.render_html(three_chain_scan, date(2026, 10, 26))
+
+    assert "Cost-negative: 3. Shown: 2." in page
+    assert page.count('<tr class="cost-negative">') == 2  # the table of pools holds two rows

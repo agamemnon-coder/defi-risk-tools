@@ -633,6 +633,71 @@ def test_a_pool_under_the_tvl_floor_is_counted_once_not_as_zero_apy(make_pool):
     assert (selection.below_min_tvl, selection.zero_apy) == (1, 0)
 
 
+# The summary by chain
+
+
+def test_each_chain_counts_its_pools_its_losers_and_its_impermanent_loss_estimates(make_pool):
+    # $1,000 held 30 days with a transaction at $0.10 (gas $0.30). A multi-asset pool also swaps
+    # $3.00, and IL at a volatility of 0.4 is 1000 * 0.4**2 * (30/365) / 8 = $1.64.
+    multi = {"stablecoin": False, "exposure": "multi"}
+    pools = [
+        make_pool(pool_id="a1", apy_base=5.0),  # 4.11 - 0.30 = +3.81
+        make_pool(pool_id="a2", apy_base=2.0, **multi),  # 1.64 - 0.30 - 3.00 = -1.66
+        make_pool(pool_id="a3", apy_base=20.0, il_risk=True, il_volatility=0.4, **multi),
+        make_pool(pool_id="a4", apy_base=2.0, il_risk=True, **multi),  # -1.66, IL unknown
+        make_pool(pool_id="b1", chain="Base", apy_base=1.0, **multi),  # 0.82 - 0.30 - 3.00
+        make_pool(pool_id="b2", chain="Base", apy_base=1.0),  # 0.82 - 0.30 = +0.52
+    ]
+    results = [evaluate_pool(pool, Assumptions(), TX) for pool in pools]
+
+    summaries = model.summarise_chains(results, ["Arbitrum", "Base", "Solana"])
+
+    fields = ("chain", "analysed", "cost_negative", "il_risk", "il_estimated", "il_unknown")
+    assert [tuple(getattr(summary, name) for name in fields) for summary in summaries] == [
+        ("Arbitrum", 4, 2, 2, 1, 1),
+        ("Base", 2, 1, 0, 0, 0),
+        ("Solana", 0, 0, 0, 0, 0),
+    ]
+    assert [summary.cost_negative_share for summary in summaries] == [0.5, 0.5, None]
+
+
+def test_the_summaries_follow_the_order_of_the_chains_asked_for(make_pool):
+    results = [evaluate_pool(make_pool(chain="Base"), Assumptions(), TX)]
+
+    summaries = model.summarise_chains(results, ["Solana", "Base"])
+
+    assert [(summary.chain, summary.analysed) for summary in summaries] == [
+        ("Solana", 0),
+        ("Base", 1),
+    ]
+
+
+def test_a_result_on_a_chain_that_was_not_asked_for_is_not_counted(make_pool):
+    results = [evaluate_pool(make_pool(chain="Ethereum", apy_base=0.0), Assumptions(), TX)]
+
+    (summary,) = model.summarise_chains(results, ["Base"])
+
+    assert (summary.analysed, summary.cost_negative) == (0, 0)
+
+
+def test_a_pool_with_an_il_figure_from_defillama_has_risk_but_is_neither_estimated_nor_unknown(
+    make_pool,
+):
+    pool = make_pool(il_risk=True, il_7d=-0.5, stablecoin=False, exposure="multi")
+
+    (summary,) = model.summarise_chains([evaluate_pool(pool, Assumptions(), TX)], ["Arbitrum"])
+
+    assert (summary.il_risk, summary.il_estimated, summary.il_unknown) == (1, 0, 0)
+
+
+def test_the_summaries_can_be_built_from_any_iterable(make_pool):
+    results = (evaluate_pool(make_pool(pool_id=str(i)), Assumptions(), TX) for i in range(3))
+
+    (summary,) = model.summarise_chains(results, ["Arbitrum"])
+
+    assert summary.analysed == 3
+
+
 @pytest.mark.parametrize(
     "bad",
     [

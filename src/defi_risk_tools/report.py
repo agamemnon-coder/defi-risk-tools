@@ -15,9 +15,8 @@ from defi_risk_tools.model import (
     COST_NEGATIVE,
     FLAG_DESCRIPTIONS,
     IL_ESTIMATED,
-    IL_RISK,
-    IL_UNKNOWN,
     Assumptions,
+    ChainSummary,
     PoolResult,
 )
 
@@ -41,9 +40,10 @@ LIMITATIONS = (
     "small-move result for a 50/50 constant-product pool. For concentrated-liquidity pools "
     "(Uniswap v3 and v4, Velodrome v3 and similar) it is a lower bound. Pools with another "
     "number of tokens, or without prices, stay IL_UNKNOWN and their net APY is optimistic.",
-    "Prices are only looked up for the pools shown (after the filters and the limit), so a pool "
-    "that loses money only once impermanent loss is counted can be missing from a short list. "
-    "A larger limit widens it.",
+    "Prices are looked up for every pool analysed, not only the pools shown, so the counts and "
+    "the order do not depend on the limit. A pool whose tokens have no usable prices, or whose "
+    "prices could not be fetched, stays IL_UNKNOWN: no loss is counted for it, so the "
+    "cost-negative counts are lower bounds for such pools.",
     "Gas and L1 data fees are rough estimates. Swap cost is a flat rate, not a price-impact model, "
     "and a single-asset pool is assumed to need no swap because you already hold its asset: if "
     "you must buy it first, that swap is not counted.",
@@ -56,7 +56,7 @@ LIMITATIONS = (
 class Scan:
     """Everything a renderer needs: the rows to show and the context they were computed in."""
 
-    rows: list[PoolResult]  # sorted, filtered and limited
+    rows: list[PoolResult]  # sorted, filtered and limited: the only part the limit applies to
     assumptions: Assumptions
     min_tvl_usd: float
     include_zero_apy: bool
@@ -65,6 +65,7 @@ class Scan:
     price_source: str  # where token prices for impermanent loss came from, or that there were none
     analysed: int  # pools the model ran on: scanned chains, at or above the TVL floor
     cost_negative: int  # how many of those are cost-negative
+    chain_summaries: list[ChainSummary]  # the same counts for each scanned chain, with IL coverage
     below_min_tvl: int  # pools on the scanned chains that were left out for low TVL
     zero_apy: int  # pools above the floor that were left out for advertising an APY of 0 or less
     skipped_entries: int  # unreadable entries in the source
@@ -142,7 +143,7 @@ def assumption_rows(scan: Scan) -> list[tuple[str, str]]:
             f"volatility^2 x T/365 / 8 of the position, from 30 days of daily prices (a 50/50 "
             "constant-product pool; a lower bound for concentrated liquidity). Capped at "
             f"{a.il_cap:.0%} of the position, and not counted when neither exists. Prices are "
-            "looked up only for the pools shown.",
+            "looked up for every pool analysed, not only the pools shown.",
         ),
         ("TVL floor", f"pools under {format_plain_money(scan.min_tvl_usd)} are left out"),
         (
@@ -155,13 +156,13 @@ def assumption_rows(scan: Scan) -> list[tuple[str, str]]:
 
 
 def il_coverage(scan: Scan) -> tuple[int, int, int]:
-    """Of the pools shown: how many have IL risk, how many of those were estimated and how many
+    """Of the pools analysed: how many have IL risk, how many of those were estimated and how many
     have no figure at all."""
-    flags = [result.flags for result in scan.rows]
+    summaries = scan.chain_summaries
     return (
-        sum(IL_RISK in f for f in flags),
-        sum(IL_ESTIMATED in f for f in flags),
-        sum(IL_UNKNOWN in f for f in flags),
+        sum(summary.il_risk for summary in summaries),
+        sum(summary.il_estimated for summary in summaries),
+        sum(summary.il_unknown for summary in summaries),
     )
 
 
@@ -176,7 +177,7 @@ def counts_lines(scan: Scan) -> list[str]:
     if at_risk:
         lines.append(
             f"Impermanent loss: estimated from token prices for {estimated} of the {at_risk} "
-            "pools shown with IL risk."
+            "analysed pools with IL risk."
         )
     return lines
 
@@ -262,6 +263,7 @@ def _text_cells(result: PoolResult) -> list[str]:
 
 
 def render_json(scan: Scan) -> str:
+    il_risk, il_estimated, il_unknown = il_coverage(scan)
     document = {
         "tool": "yield-scan",
         "version": __version__,
@@ -281,8 +283,9 @@ def render_json(scan: Scan) -> str:
             "below_min_tvl": scan.below_min_tvl,
             "zero_apy": scan.zero_apy,
             "skipped_entries": scan.skipped_entries,
-            "il_estimated": il_coverage(scan)[1],
-            "il_unknown": il_coverage(scan)[2],
+            "il_risk": il_risk,
+            "il_estimated": il_estimated,
+            "il_unknown": il_unknown,
         },
         "notes": scan.notes,
         "pools": [_pool_record(result) for result in scan.rows],
